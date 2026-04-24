@@ -1,0 +1,1 @@
+# oidc-scim-entra-script
