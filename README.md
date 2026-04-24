@@ -44,12 +44,12 @@ Run directly from the Azure Cloud Shell without cloning the repo:
 
 **Bash** (Cloud Shell default):
 ```bash
-bash <(curl -sL https://gist.githubusercontent.com/samcofer/0fa70e259a0cee9b412d4155234fef62/raw/posit-oidc-scim-entra-configuration.sh)
+bash <(curl -sL https://raw.githubusercontent.com/samcofer/oidc-scim-entra-script/main/posit-oidc-scim-entra-configuration.sh)
 ```
 
 **PowerShell** (Cloud Shell PowerShell mode):
 ```powershell
-Invoke-Expression (Invoke-RestMethod https://gist.githubusercontent.com/samcofer/be795f3799e127ace37e7038f8fef94c/raw/posit-oidc-scim-entra-configuration.ps1)
+Invoke-Expression (Invoke-RestMethod https://raw.githubusercontent.com/samcofer/oidc-scim-entra-script/main/posit-oidc-scim-entra-configuration.ps1)
 ```
 
 Azure Cloud Shell comes pre-authenticated with `az` and includes `jq`, so no additional setup is needed.
@@ -119,6 +119,7 @@ export GROUP_CLAIMS=SecurityGroup
 | `SCIM_APP_NAME` | Display name for the SCIM enterprise app | `{APP_NAME}-scim-provisioning` |
 | `SCIM_URL` | Workbench SCIM endpoint URL | `{BASE_URL}/scim/v2` |
 | `SCIM_TOKEN` | SCIM bearer token (prompted securely; not echoed) | _(required if SCIM enabled)_ |
+| `SCIM_CONNECTIVITY_CONFIRMED` | Confirm Azure-to-Workbench connectivity exists via VPN/private endpoint (`Yes`/`No`) | `No` |
 | `START_SCIM` | Start the SCIM provisioning job immediately (`Yes`/`No`) | `No` |
 
 ## What the Scripts Create
