@@ -13,19 +13,59 @@ normalize_yesno() {
   esac
 }
 
+validate_https_url() {
+  local url="$1" suffix="${2:-}"
+  if [[ ! "$url" =~ ^https:// ]]; then
+    echo "URL must start with https://"
+    return 1
+  fi
+  if [[ -n "$suffix" && "$url" != *"$suffix" ]]; then
+    echo "URL must end with $suffix"
+    return 1
+  fi
+  return 0
+}
+
 prompt() {
   local var="$1" label="$2" default="${3:-}" secret="${4:-false}"
   [[ -n "${!var:-}" ]] && return 0
 
   local value
-  if [[ "$secret" == "true" ]]; then
-    read -rsp "$label${default:+ [$default]}: " value </dev/tty
+  while true; do
+    if [[ "$secret" == "true" ]]; then
+      read -rsp "$label${default:+ [$default]}: " value </dev/tty
+    else
+      read -rp "$label${default:+ [$default]}: " value </dev/tty
+    fi
     echo
-  else
-    read -rp "$label${default:+ [$default]}: " value </dev/tty
+    value="${value:-$default}"
+    if [[ -n "$value" ]]; then break; fi
+    echo "A value is required."
+  done
+
+  export "$var=$value"
+}
+
+prompt_url() {
+  local var="$1" label="$2" default="${3:-}" suffix="${4:-}"
+
+  if [[ -n "${!var:-}" ]]; then
+    validate_https_url "${!var}" "$suffix" || exit 1
+    return 0
   fi
 
-  export "$var=${value:-$default}"
+  while true; do
+    read -rp "$label${default:+ [$default]}: " value </dev/tty
+    echo
+    value="${value:-$default}"
+    if [[ -z "$value" ]]; then
+      echo "A value is required."
+      continue
+    fi
+    if validate_https_url "$value" "$suffix"; then break; fi
+  done
+
+  export "$var=$value"
 }
 
 yesno() {
@@ -42,6 +82,7 @@ yesno() {
 
   while true; do
     read -rp "$label [Yes/No, default $default]: " value </dev/tty
+    echo
     value="${value:-$default}"
 
     normalized="$(normalize_yesno "$value")" && break
@@ -83,6 +124,7 @@ select_product() {
   local choice
   while true; do
     read -rp "Product [1/2/3]: " choice </dev/tty
+    echo
     case "$choice" in
       1|workbench)      PRODUCT="workbench"; break ;;
       2|connect)        PRODUCT="connect"; break ;;
@@ -172,26 +214,53 @@ echo ""
 echo "Configuring Entra ID for $PRODUCT_LABEL"
 echo "========================================"
 
-SKIP_OIDC="${SKIP_OIDC:-No}"
-
 if [[ "$PRODUCT" == "workbench" ]]; then
-  yesno SKIP_OIDC "Skip OIDC app registration and configure SCIM only?" "No"
-fi
-
-if [[ "$PRODUCT" != "workbench" ]]; then
+  if [[ -n "${WB_MODE:-}" ]]; then
+    case "${WB_MODE,,}" in
+      1|oidc-scim|oidc+scim) SKIP_OIDC="No";  CREATE_SCIM="Yes" ;;
+      2|oidc)                SKIP_OIDC="No";  CREATE_SCIM="No" ;;
+      3|scim)                SKIP_OIDC="Yes"; CREATE_SCIM="Yes" ;;
+      *) echo "Invalid WB_MODE value: $WB_MODE. Use oidc+scim, oidc, or scim."; exit 1 ;;
+    esac
+  else
+    echo ""
+    echo "Select Workbench configuration mode:"
+    echo "  1) OIDC + SCIM provisioning"
+    echo "  2) OIDC only"
+    echo "  3) SCIM provisioning only"
+    echo ""
+    while true; do
+      read -rp "Mode [1/2/3]: " wb_choice </dev/tty
+      echo
+      case "$wb_choice" in
+        1) SKIP_OIDC="No";  CREATE_SCIM="Yes"; break ;;
+        2) SKIP_OIDC="No";  CREATE_SCIM="No";  break ;;
+        3) SKIP_OIDC="Yes"; CREATE_SCIM="Yes"; break ;;
+        *) echo "Please enter 1, 2, or 3." ;;
+      esac
+    done
+  fi
+else
+  SKIP_OIDC="No"
   CREATE_SCIM="No"
 fi
 
 if [[ "$SKIP_OIDC" != "Yes" ]]; then
   prompt APP_NAME "OIDC app registration name" "$DEFAULT_APP_NAME"
-  prompt BASE_URL "$PRODUCT_LABEL base URL, e.g. $URL_EXAMPLE"
+  prompt_url BASE_URL "$PRODUCT_LABEL base URL" "$URL_EXAMPLE"
 
   case "$PRODUCT" in
-    workbench)      DEFAULT_REDIRECT="${BASE_URL%/}/openid/callback" ;;
-    connect|packagemanager) DEFAULT_REDIRECT="${BASE_URL%/}/__login__/callback" ;;
+    workbench)
+      DEFAULT_REDIRECT="${BASE_URL%/}/openid/callback"
+      REDIRECT_SUFFIX="/openid/callback"
+      ;;
+    connect|packagemanager)
+      DEFAULT_REDIRECT="${BASE_URL%/}/__login__/callback"
+      REDIRECT_SUFFIX="/__login__/callback"
+      ;;
   esac
 
-  prompt REDIRECT_URI "OIDC redirect URI" "$DEFAULT_REDIRECT"
+  prompt_url REDIRECT_URI "OIDC redirect URI" "$DEFAULT_REDIRECT" "$REDIRECT_SUFFIX"
   prompt CLIENT_SECRET_NAME "Client secret display name" "${APP_NAME}-secret"
   prompt SIGNIN_AUDIENCE "Sign-in audience: AzureADMyOrg, AzureADMultipleOrgs" "AzureADMyOrg"
   yesno INCLUDE_GROUP_CLAIMS "Include group claims in ID/access tokens?" "Yes"
@@ -273,7 +342,14 @@ if [[ "$SKIP_OIDC" != "Yes" ]]; then
 
   echo "Creating/ensuring enterprise service principal..."
   az ad sp create --id "$CLIENT_ID" >/dev/null 2>&1 || true
-  SP_OBJECT_ID="$(az ad sp show --id "$CLIENT_ID" --query id -o tsv)"
+  for i in $(seq 1 6); do
+    SP_OBJECT_ID="$(az ad sp show --id "$CLIENT_ID" --query id -o tsv 2>/dev/null)" && [[ -n "$SP_OBJECT_ID" ]] && break
+    if (( i == 6 )); then
+      echo "Timed out waiting for service principal for $CLIENT_ID to become available." >&2
+      exit 1
+    fi
+    sleep 5
+  done
 
   az rest --method POST \
     --url "https://graph.microsoft.com/v1.0/servicePrincipals/$SP_OBJECT_ID/owners/\$ref" \
@@ -302,13 +378,9 @@ if [[ "$SKIP_OIDC" != "Yes" ]]; then
       }')" \
     >/dev/null
 
-  if [[ "$PRODUCT" == "workbench" ]]; then
-    yesno CREATE_SCIM "Create a separate SCIM enterprise app for Workbench provisioning?" "No"
-  fi
 else
-  prompt BASE_URL "$PRODUCT_LABEL base URL, e.g. $URL_EXAMPLE"
+  prompt_url BASE_URL "$PRODUCT_LABEL base URL" "$URL_EXAMPLE"
   APP_NAME="${APP_NAME:-$DEFAULT_APP_NAME}"
-  CREATE_SCIM="Yes"
 fi
 
 # --- SCIM (Workbench only) ---
@@ -319,7 +391,20 @@ if [[ "$CREATE_SCIM" == "Yes" ]]; then
   DEFAULT_SCIM_URL="${BASE_URL%/}/scim/v2"
 
   prompt SCIM_APP_NAME "SCIM enterprise app name" "$DEFAULT_SCIM_APP_NAME"
-  prompt SCIM_URL "Workbench SCIM base URL" "$DEFAULT_SCIM_URL"
+  prompt_url SCIM_URL "Workbench SCIM base URL" "$DEFAULT_SCIM_URL" "/scim/v2"
+
+  echo "Testing SCIM endpoint reachability..."
+  if curl -sk --connect-timeout 10 -o /dev/null -w '' "$SCIM_URL" 2>/dev/null; then
+    echo "SCIM endpoint is reachable."
+  else
+    echo "WARNING: SCIM endpoint at $SCIM_URL is not reachable from this environment."
+    yesno SCIM_CONNECTIVITY_CONFIRMED "Do you have connectivity between Azure and your Workbench instance handled via another avenue (e.g., VPN, private endpoint)?" "No"
+    if [[ "$SCIM_CONNECTIVITY_CONFIRMED" != "Yes" ]]; then
+      echo "SCIM provisioning requires network connectivity from Azure to your Workbench instance. Exiting."
+      exit 1
+    fi
+  fi
+
   prompt SCIM_TOKEN "Workbench SCIM bearer token" "" true
   yesno START_SCIM "Start SCIM provisioning job now?" "No"
 

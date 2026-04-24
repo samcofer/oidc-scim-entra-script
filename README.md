@@ -106,12 +106,16 @@ export GROUP_CLAIMS=SecurityGroup
 | `INCLUDE_GROUP_CLAIMS` | Include group claims in tokens (`Yes`/`No`) | `Yes` |
 | `GROUP_CLAIMS` | Group claim mode: `SecurityGroup`, `All`, `DirectoryRole`, `ApplicationGroup`, `None` | `SecurityGroup` |
 
-### SCIM (Workbench Only)
+### Workbench Mode
 
 | Variable | Description | Default |
 |----------|-------------|---------|
-| `SKIP_OIDC` | Skip OIDC and configure SCIM only (`Yes`/`No`) | `No` |
-| `CREATE_SCIM` | Create a SCIM enterprise app (`Yes`/`No`) | `No` |
+| `WB_MODE` | Workbench configuration mode: `oidc+scim`/`1`, `oidc`/`2`, `scim`/`3` | _(interactive menu)_ |
+
+### SCIM (Workbench Only, when mode includes SCIM)
+
+| Variable | Description | Default |
+|----------|-------------|---------|
 | `SCIM_APP_NAME` | Display name for the SCIM enterprise app | `{APP_NAME}-scim-provisioning` |
 | `SCIM_URL` | Workbench SCIM endpoint URL | `{BASE_URL}/scim/v2` |
 | `SCIM_TOKEN` | SCIM bearer token (prompted securely; not echoed) | _(required if SCIM enabled)_ |

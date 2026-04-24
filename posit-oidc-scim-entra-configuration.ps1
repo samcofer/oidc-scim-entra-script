@@ -14,15 +14,18 @@ function Prompt-Value {
     if ($envVal) { return $envVal }
 
     $prompt = if ($Default) { "$Label [$Default]" } else { $Label }
-    if ($Secret) {
-        $secure = Read-Host -Prompt $prompt -AsSecureString
-        $value = [System.Runtime.InteropServices.Marshal]::PtrToStringAuto(
-            [System.Runtime.InteropServices.Marshal]::SecureStringToBSTR($secure))
-    } else {
-        $value = Read-Host -Prompt $prompt
+    while ($true) {
+        if ($Secret) {
+            $secure = Read-Host -Prompt $prompt -AsSecureString
+            $value = [System.Runtime.InteropServices.Marshal]::PtrToStringAuto(
+                [System.Runtime.InteropServices.Marshal]::SecureStringToBSTR($secure))
+        } else {
+            $value = Read-Host -Prompt $prompt
+        }
+        if (-not $value) { $value = $Default }
+        if ($value) { return $value }
+        Write-Host 'A value is required.'
     }
-    if (-not $value) { $value = $Default }
-    return $value
 }
 
 function Prompt-YesNo {
@@ -48,6 +51,44 @@ function Prompt-YesNo {
             { $_ -in 'n','no' }  { return 'No' }
             default { Write-Host 'Please enter Yes or No.' }
         }
+    }
+}
+
+function Validate-Url {
+    param(
+        [string]$Url,
+        [string]$Suffix = ''
+    )
+    if ($Url -notmatch '^https://') {
+        Write-Host 'URL must start with https://'
+        return $false
+    }
+    if ($Suffix -and -not $Url.EndsWith($Suffix)) {
+        Write-Host "URL must end with $Suffix"
+        return $false
+    }
+    return $true
+}
+
+function Prompt-Url {
+    param(
+        [string]$Name,
+        [string]$Label,
+        [string]$Default = '',
+        [string]$Suffix = ''
+    )
+    $envVal = [Environment]::GetEnvironmentVariable($Name)
+    if ($envVal) {
+        if (-not (Validate-Url -Url $envVal -Suffix $Suffix)) { throw "Invalid URL for ${Name}: $envVal" }
+        return $envVal
+    }
+
+    $prompt = if ($Default) { "$Label [$Default]" } else { $Label }
+    while ($true) {
+        $value = Read-Host -Prompt $prompt
+        if (-not $value) { $value = $Default }
+        if (-not $value) { Write-Host 'A value is required.'; continue }
+        if (Validate-Url -Url $value -Suffix $Suffix) { return $value }
     }
 }
 
@@ -169,25 +210,51 @@ Write-Host ''
 Write-Host "Configuring Entra ID for $($ProductConfig.Label)"
 Write-Host '========================================'
 
-$SkipOidc = 'No'
 if ($Product -eq 'workbench') {
-    $SkipOidc = Prompt-YesNo -Name 'SKIP_OIDC' -Label 'Skip OIDC app registration and configure SCIM only?' -Default 'No'
+    $WbMode = [Environment]::GetEnvironmentVariable('WB_MODE')
+    if ($WbMode) {
+        switch ($WbMode.ToLower()) {
+            { $_ -in '1','oidc-scim','oidc+scim' } { $SkipOidc = 'No';  $CreateScim = 'Yes' }
+            { $_ -in '2','oidc' }                   { $SkipOidc = 'No';  $CreateScim = 'No' }
+            { $_ -in '3','scim' }                    { $SkipOidc = 'Yes'; $CreateScim = 'Yes' }
+            default { throw "Invalid WB_MODE value: $WbMode. Use oidc+scim, oidc, or scim." }
+        }
+    } else {
+        Write-Host ''
+        Write-Host 'Select Workbench configuration mode:'
+        Write-Host '  1) OIDC + SCIM provisioning'
+        Write-Host '  2) OIDC only'
+        Write-Host '  3) SCIM provisioning only'
+        Write-Host ''
+        while ($true) {
+            $wbChoice = Read-Host -Prompt 'Mode [1/2/3]'
+            switch ($wbChoice) {
+                '1' { $SkipOidc = 'No';  $CreateScim = 'Yes'; break }
+                '2' { $SkipOidc = 'No';  $CreateScim = 'No';  break }
+                '3' { $SkipOidc = 'Yes'; $CreateScim = 'Yes'; break }
+                default { Write-Host 'Please enter 1, 2, or 3.'; continue }
+            }
+            break
+        }
+    }
+} else {
+    $SkipOidc = 'No'
+    $CreateScim = 'No'
 }
-
-$CreateScim = if ($Product -ne 'workbench') { 'No' } else { $null }
 
 if ($SkipOidc -ne 'Yes') {
     $AppName          = Prompt-Value -Name 'APP_NAME'           -Label 'OIDC app registration name'         -Default $ProductConfig.DefaultAppName
-    $BaseUrl          = Prompt-Value -Name 'BASE_URL'           -Label "$($ProductConfig.Label) base URL, e.g. $($ProductConfig.UrlExample)"
+    $BaseUrl          = Prompt-Url   -Name 'BASE_URL'           -Label "$($ProductConfig.Label) base URL"    -Default $ProductConfig.UrlExample
     $script:State['AppName'] = $AppName
     $script:State['BaseUrl'] = $BaseUrl
 
-    $DefaultRedirect = switch ($Product) {
-        'workbench' { "$($BaseUrl.TrimEnd('/'))/openid/callback" }
-        default     { "$($BaseUrl.TrimEnd('/'))/__login__/callback" }
+    $RedirectSuffix = switch ($Product) {
+        'workbench' { '/openid/callback' }
+        default     { '/__login__/callback' }
     }
+    $DefaultRedirect = "$($BaseUrl.TrimEnd('/'))$RedirectSuffix"
 
-    $RedirectUri      = Prompt-Value -Name 'REDIRECT_URI'       -Label 'OIDC redirect URI'                  -Default $DefaultRedirect
+    $RedirectUri      = Prompt-Url   -Name 'REDIRECT_URI'       -Label 'OIDC redirect URI'                  -Default $DefaultRedirect -Suffix $RedirectSuffix
     $ClientSecretName = Prompt-Value -Name 'CLIENT_SECRET_NAME' -Label 'Client secret display name'         -Default "$AppName-secret"
     $SigninAudience   = Prompt-Value -Name 'SIGNIN_AUDIENCE'    -Label 'Sign-in audience: AzureADMyOrg, AzureADMultipleOrgs' -Default 'AzureADMyOrg'
     $IncludeGroups    = Prompt-YesNo -Name 'INCLUDE_GROUP_CLAIMS' -Label 'Include group claims in ID/access tokens?' -Default 'Yes'
@@ -265,7 +332,15 @@ if ($SkipOidc -ne 'Yes') {
 
     Write-Host 'Creating/ensuring enterprise service principal...'
     try { Invoke-Az ad sp create --id $ClientId | Out-Null } catch { }
-    $SpObjectId = (Invoke-AzJson ad sp show --id $ClientId).id
+    for ($i = 1; $i -le 6; $i++) {
+        try {
+            $SpObjectId = (Invoke-AzJson ad sp show --id $ClientId).id
+            break
+        } catch {
+            if ($i -eq 6) { throw "Timed out waiting for service principal for $ClientId to become available." }
+            Start-Sleep -Seconds 5
+        }
+    }
     $script:State['SpObjectId'] = $SpObjectId
 
     try {
@@ -284,15 +359,9 @@ if ($SkipOidc -ne 'Yes') {
     } | ConvertTo-Json -Compress
     Invoke-AzRestVoid -Method POST -Url "https://graph.microsoft.com/v1.0/servicePrincipals/$SpObjectId/appRoleAssignedTo" -Body $assignBody
 
-    if ($Product -eq 'workbench') {
-        if (-not $CreateScim) {
-            $CreateScim = Prompt-YesNo -Name 'CREATE_SCIM' -Label 'Create a separate SCIM enterprise app for Workbench provisioning?' -Default 'No'
-        }
-    }
 } else {
-    $BaseUrl = Prompt-Value -Name 'BASE_URL' -Label "$($ProductConfig.Label) base URL, e.g. $($ProductConfig.UrlExample)"
+    $BaseUrl = Prompt-Url -Name 'BASE_URL' -Label "$($ProductConfig.Label) base URL" -Default $ProductConfig.UrlExample
     $AppName = if ([Environment]::GetEnvironmentVariable('APP_NAME')) { [Environment]::GetEnvironmentVariable('APP_NAME') } else { $ProductConfig.DefaultAppName }
-    $CreateScim = 'Yes'
 }
 
 # --- SCIM (Workbench only) ---
@@ -303,7 +372,29 @@ if ($CreateScim -eq 'Yes') {
     $DefaultScimUrl     = "$($BaseUrl.TrimEnd('/'))/scim/v2"
 
     $ScimAppName = Prompt-Value -Name 'SCIM_APP_NAME' -Label 'SCIM enterprise app name'     -Default $DefaultScimAppName
-    $ScimUrl     = Prompt-Value -Name 'SCIM_URL'      -Label 'Workbench SCIM base URL'      -Default $DefaultScimUrl
+    $ScimUrl     = Prompt-Url   -Name 'SCIM_URL'      -Label 'Workbench SCIM base URL'      -Default $DefaultScimUrl -Suffix '/scim/v2'
+
+    Write-Host 'Testing SCIM endpoint reachability...'
+    $scimReachable = $false
+    try {
+        $null = Invoke-WebRequest -Uri $ScimUrl -Method Head -TimeoutSec 10 -SkipCertificateCheck -ErrorAction Stop
+        $scimReachable = $true
+    } catch [System.Net.Http.HttpRequestException] {
+        $scimReachable = $false
+    } catch {
+        $scimReachable = $true
+    }
+    if ($scimReachable) {
+        Write-Host 'SCIM endpoint is reachable.'
+    } else {
+        Write-Host "WARNING: SCIM endpoint at $ScimUrl is not reachable from this environment."
+        $scimConfirmed = Prompt-YesNo -Name 'SCIM_CONNECTIVITY_CONFIRMED' -Label 'Do you have connectivity between Azure and your Workbench instance handled via another avenue (e.g., VPN, private endpoint)?' -Default 'No'
+        if ($scimConfirmed -ne 'Yes') {
+            Write-Host 'SCIM provisioning requires network connectivity from Azure to your Workbench instance. Exiting.'
+            exit 1
+        }
+    }
+
     $ScimToken   = Prompt-Value -Name 'SCIM_TOKEN'    -Label 'Workbench SCIM bearer token'   -Secret
     $StartScim   = Prompt-YesNo -Name 'START_SCIM'    -Label 'Start SCIM provisioning job now?' -Default 'No'
 
