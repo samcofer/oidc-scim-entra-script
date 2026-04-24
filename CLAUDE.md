@@ -21,10 +21,7 @@ Two functionally equivalent scripts exist:
 - `posit-oidc-scim-entra-configuration.sh` — Bash 4+, requires `az` and `jq`
 - `posit-oidc-scim-entra-configuration.ps1` — PowerShell 7.0+, requires `az` in PATH
 
-Both scripts are published as public GitHub gists for one-liner Azure Cloud Shell usage. If you modify a script, update its gist too:
-
-- Bash gist: `gh gist edit 0fa70e259a0cee9b412d4155234fef62 -f posit-oidc-scim-entra-configuration.sh posit-oidc-scim-entra-configuration.sh`
-- PS1 gist: `gh gist edit be795f3799e127ace37e7038f8fef94c -f posit-oidc-scim-entra-configuration.ps1 posit-oidc-scim-entra-configuration.ps1`
+Both scripts are served directly from this GitHub repo for one-liner Azure Cloud Shell usage. After each round of changes, commit and push to `main` so the Cloud Shell one-liners pick up the updates immediately.
 
 ## Shared Script Architecture
 
