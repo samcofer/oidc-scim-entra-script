@@ -225,30 +225,76 @@ if ($Product) {
 }
 $script:State['Product'] = $Product
 
-$ProductConfig = switch ($Product) {
-    'workbench'      { @{ DefaultAppName = 'posit-workbench-oidc';        Label = 'Posit Workbench';        UrlExample = 'https://workbench.example.com' } }
-    'connect'        { @{ DefaultAppName = 'posit-connect-oidc';          Label = 'Posit Connect';          UrlExample = 'https://connect.example.com' } }
-    'packagemanager' { @{ DefaultAppName = 'posit-package-manager-oidc';  Label = 'Posit Package Manager';  UrlExample = 'https://packagemanager.example.com' } }
-}
-
-Write-Host ''
-Write-Host "Configuring Entra ID for $($ProductConfig.Label)"
-Write-Host '========================================'
+# --- Workbench mode pre-check (needed before auth protocol selection) ---
+$SkipOidc = 'No'
+$CreateScim = 'No'
+$WbModeScimOnly = 'No'
 
 if ($Product -eq 'workbench') {
     $WbMode = [Environment]::GetEnvironmentVariable('WB_MODE')
-    if ($WbMode) {
-        switch ($WbMode.ToLower()) {
-            { $_ -in '1','oidc-scim','oidc+scim' } { $SkipOidc = 'No';  $CreateScim = 'Yes' }
-            { $_ -in '2','oidc' }                   { $SkipOidc = 'No';  $CreateScim = 'No' }
-            { $_ -in '3','scim' }                    { $SkipOidc = 'Yes'; $CreateScim = 'Yes' }
-            default { throw "Invalid WB_MODE value: $WbMode. Use oidc+scim, oidc, or scim." }
+    if ($WbMode -and $WbMode.ToLower() -in '3','scim') {
+        $WbModeScimOnly = 'Yes'
+    }
+}
+
+# --- Auth protocol selection ---
+if ($Product -eq 'packagemanager') {
+    $AuthProtocol = 'oidc'
+} elseif ($WbModeScimOnly -eq 'Yes') {
+    $AuthProtocol = 'scim-only'
+} else {
+    $AuthProtocol = [Environment]::GetEnvironmentVariable('AUTH_PROTOCOL')
+    if ($AuthProtocol) {
+        $AuthProtocol = switch ($AuthProtocol.ToLower()) {
+            { $_ -in '1','oidc' } { 'oidc' }
+            { $_ -in '2','saml' } { 'saml' }
+            default { throw "Invalid AUTH_PROTOCOL value: $AuthProtocol. Use oidc or saml." }
         }
     } else {
         Write-Host ''
+        Write-Host 'Select authentication protocol:'
+        Write-Host '  1) OpenID Connect (OIDC)'
+        Write-Host '  2) SAML'
+        Write-Host ''
+        while ($true) {
+            $protoChoice = Read-Host -Prompt 'Protocol [1/2]'
+            $AuthProtocol = switch ($protoChoice) {
+                '1' { 'oidc' }
+                '2' { 'saml' }
+                default { $null }
+            }
+            if ($AuthProtocol) { break }
+            Write-Host 'Please enter 1 or 2.'
+        }
+    }
+}
+$script:State['AuthProtocol'] = $AuthProtocol
+
+$defaultAppName = if ($Product -eq 'workbench' -and $AuthProtocol -eq 'scim-only') { 'posit-workbench-scim' } elseif ($Product -eq 'workbench') { "posit-workbench-$AuthProtocol" } elseif ($Product -eq 'connect') { "posit-connect-$AuthProtocol" } else { 'posit-package-manager-oidc' }
+$ProductConfig = switch ($Product) {
+    'workbench'      { @{ DefaultAppName = $defaultAppName;  Label = 'Posit Workbench';        UrlExample = 'https://workbench.example.com' } }
+    'connect'        { @{ DefaultAppName = $defaultAppName;  Label = 'Posit Connect';          UrlExample = 'https://connect.example.com' } }
+    'packagemanager' { @{ DefaultAppName = $defaultAppName;  Label = 'Posit Package Manager';  UrlExample = 'https://packagemanager.example.com' } }
+}
+
+Write-Host ''
+Write-Host "Configuring Entra ID for $($ProductConfig.Label) ($AuthProtocol)"
+Write-Host '========================================'
+
+if ($Product -eq 'workbench') {
+    if ($WbMode) {
+        switch ($WbMode.ToLower()) {
+            { $_ -in '1','oidc-scim','oidc+scim','saml+scim','saml-scim' } { $SkipOidc = 'No';  $CreateScim = 'Yes' }
+            { $_ -in '2','oidc','saml' }                                    { $SkipOidc = 'No';  $CreateScim = 'No' }
+            { $_ -in '3','scim' }                                            { $SkipOidc = 'Yes'; $CreateScim = 'Yes' }
+            default { throw "Invalid WB_MODE value: $WbMode. Use oidc+scim, saml+scim, oidc, saml, or scim." }
+        }
+    } else {
+        $authLabel = $AuthProtocol.ToUpper()
+        Write-Host ''
         Write-Host 'Select Workbench configuration mode:'
-        Write-Host '  1) OIDC + SCIM provisioning'
-        Write-Host '  2) OIDC only'
+        Write-Host "  1) $authLabel + SCIM provisioning"
+        Write-Host "  2) $authLabel only"
         Write-Host '  3) SCIM provisioning only'
         Write-Host ''
         while ($true) {
@@ -262,9 +308,6 @@ if ($Product -eq 'workbench') {
             break
         }
     }
-} else {
-    $SkipOidc = 'No'
-    $CreateScim = 'No'
 }
 
 if ($SkipOidc -ne 'Yes') {
@@ -273,19 +316,37 @@ if ($SkipOidc -ne 'Yes') {
     $script:State['AppName'] = $AppName
     $script:State['BaseUrl'] = $BaseUrl
 
-    $RedirectSuffix = switch ($Product) {
-        'workbench' { '/openid/callback' }
-        default     { '/__login__/callback' }
-    }
-    $DefaultRedirect = "$($BaseUrl.TrimEnd('/'))$RedirectSuffix"
-
-    $RedirectUri      = Prompt-Url   -Name 'REDIRECT_URI'       -Label 'OIDC redirect URI'                  -Default $DefaultRedirect -Suffix $RedirectSuffix
-    $ClientSecretName = Prompt-Value -Name 'CLIENT_SECRET_NAME' -Label 'Client secret display name'         -Default "$AppName-secret"
+    # --- Common prompts ---
     $SigninAudience   = Prompt-Value -Name 'SIGNIN_AUDIENCE'    -Label 'Sign-in audience: AzureADMyOrg, AzureADMultipleOrgs' -Default 'AzureADMyOrg'
     $IncludeGroups    = Prompt-YesNo -Name 'INCLUDE_GROUP_CLAIMS' -Label 'Include group claims in ID/access tokens?' -Default 'Yes'
     $GroupClaims      = Prompt-Value -Name 'GROUP_CLAIMS'       -Label 'Group claim mode: SecurityGroup, All, DirectoryRole, ApplicationGroup, None' -Default 'SecurityGroup'
 
     $GroupMembership = if ($IncludeGroups -eq 'Yes') { $GroupClaims } else { 'None' }
+
+    # --- OIDC-specific prompts ---
+    if ($AuthProtocol -eq 'oidc') {
+        $RedirectSuffix = switch ($Product) {
+            'workbench' { '/openid/callback' }
+            default     { '/__login__/callback' }
+        }
+        $DefaultRedirect = "$($BaseUrl.TrimEnd('/'))$RedirectSuffix"
+
+        $RedirectUri      = Prompt-Url   -Name 'REDIRECT_URI'       -Label 'OIDC redirect URI'                  -Default $DefaultRedirect -Suffix $RedirectSuffix
+        $ClientSecretName = Prompt-Value -Name 'CLIENT_SECRET_NAME' -Label 'Client secret display name'         -Default "$AppName-secret"
+    }
+
+    # --- SAML-specific computed values (ACS URL only; entity ID set after app creation) ---
+    if ($AuthProtocol -eq 'saml') {
+        $SamlAcsUrl = switch ($Product) {
+            'workbench' { "$($BaseUrl.TrimEnd('/'))/saml/acs" }
+            'connect'   { "$($BaseUrl.TrimEnd('/'))/__login__/saml/acs" }
+        }
+    }
+
+    # --- JIT provisioning prompt (Workbench only) ---
+    if ($Product -eq 'workbench') {
+        $EnableJit = Prompt-YesNo -Name 'ENABLE_JIT' -Label 'Enable JIT (Just-In-Time) user provisioning?' -Default 'No'
+    }
 
     # --- Collect SCIM prompts early for unified mode ---
     if ($CreateScim -eq 'Yes') {
@@ -316,12 +377,14 @@ if ($SkipOidc -ne 'Yes') {
         if ($CreateScim -eq 'Yes') {
             $ScimToken = Prompt-Value -Name 'SCIM_TOKEN' -Label 'Workbench SCIM bearer token' -Secret
             $StartScim = Prompt-YesNo -Name 'START_SCIM' -Label 'Start SCIM provisioning job now?' -Default 'No'
+            $EnableScimGroups = Prompt-YesNo -Name 'ENABLE_SCIM_GROUPS' -Label 'Enable SCIM group provisioning?' -Default 'Yes'
         }
     }
 
-    # --- Create app registration ---
-    if ($CreateScim -eq 'Yes') {
-        Write-Host 'Creating unified OIDC+SCIM app from Microsoft template...'
+    # --- Create app registration / enterprise app ---
+    if ($AuthProtocol -eq 'saml' -or $CreateScim -eq 'Yes') {
+        # SAML and SCIM both require template instantiation for enterprise app
+        Write-Host 'Creating enterprise application from Microsoft template...'
         $instantiateBody = @{ displayName = $AppName } | ConvertTo-Json -Compress
         $templateJson = Invoke-AzRestJson -Method POST -Url "https://graph.microsoft.com/v1.0/applicationTemplates/$ScimTemplateId/instantiate" -Body $instantiateBody
 
@@ -347,25 +410,45 @@ if ($SkipOidc -ne 'Yes') {
 
         $AppObjectId = (Invoke-AzJson ad app show --id $ClientId).id
 
-        Write-Host 'Configuring app registration with OIDC settings...'
-        $patchBody = @{
-            signInAudience        = $SigninAudience
-            groupMembershipClaims = $GroupMembership
-            web = @{
-                redirectUris = @($RedirectUri)
-                implicitGrantSettings = @{
-                    enableIdTokenIssuance     = $true
-                    enableAccessTokenIssuance = $false
+        if ($AuthProtocol -eq 'saml') {
+            $SamlEntityId = "api://$ClientId"
+
+            Write-Host 'Configuring SAML on app registration...'
+            $patchBody = @{
+                identifierUris        = @($SamlEntityId)
+                groupMembershipClaims = $GroupMembership
+                web = @{
+                    redirectUris = @($SamlAcsUrl)
                 }
-            }
-            optionalClaims = @{
-                idToken = @(
-                    @{ name = 'email';              essential = $false }
-                    @{ name = 'preferred_username'; essential = $false }
-                )
-            }
-        } | ConvertTo-Json -Depth 5 -Compress
-        Invoke-AzRestVoid -Method PATCH -Url "https://graph.microsoft.com/v1.0/applications/$AppObjectId" -Body $patchBody
+            } | ConvertTo-Json -Depth 5 -Compress
+            Invoke-AzRestVoid -Method PATCH -Url "https://graph.microsoft.com/v1.0/applications/$AppObjectId" -Body $patchBody
+
+            Write-Host 'Enabling SAML single sign-on on enterprise app...'
+            $samlBody = @{ preferredSingleSignOnMode = 'saml' } | ConvertTo-Json -Compress
+            Invoke-AzRestVoid -Method PATCH -Url "https://graph.microsoft.com/v1.0/servicePrincipals/$SpObjectId" -Body $samlBody
+
+            $SamlMetadataUrl = "https://login.microsoftonline.com/$TenantId/federationmetadata/2007-06/federationmetadata.xml?appid=$ClientId"
+        } else {
+            Write-Host 'Configuring app registration with OIDC settings...'
+            $patchBody = @{
+                signInAudience        = $SigninAudience
+                groupMembershipClaims = $GroupMembership
+                web = @{
+                    redirectUris = @($RedirectUri)
+                    implicitGrantSettings = @{
+                        enableIdTokenIssuance     = $true
+                        enableAccessTokenIssuance = $false
+                    }
+                }
+                optionalClaims = @{
+                    idToken = @(
+                        @{ name = 'email';              essential = $false }
+                        @{ name = 'preferred_username'; essential = $false }
+                    )
+                }
+            } | ConvertTo-Json -Depth 5 -Compress
+            Invoke-AzRestVoid -Method PATCH -Url "https://graph.microsoft.com/v1.0/applications/$AppObjectId" -Body $patchBody
+        }
     } else {
         Write-Host 'Creating OIDC app registration...'
         $appBody = @{
@@ -397,23 +480,26 @@ if ($SkipOidc -ne 'Yes') {
 
     Set-AppLogo -AppObjectId $AppObjectId
 
-    Write-Host 'Adding OpenID delegated permissions...'
-    try {
-        Invoke-Az ad app permission add --id $ClientId --api $GraphAppId --api-permissions `
-            '37f7f235-527c-4136-accd-4a02d197296e=Scope' `
-            '64a6cdd6-aab1-4aaf-94b8-3cc8405e90d0=Scope' `
-            '14dad69e-099b-42c9-810b-d002981feec1=Scope' `
-            '7427e0e9-2fba-42fe-b0c0-848c9e6a818b=Scope' `
-            'e1fe6dd8-ba31-4d61-89e7-88639da4683d=Scope' | Out-Null
-    } catch {
-        if ($_.Exception.Message -notmatch 'already exist') { throw }
-    }
+    # --- OIDC-specific: delegated permissions + client secret ---
+    if ($AuthProtocol -eq 'oidc') {
+        Write-Host 'Adding OpenID delegated permissions...'
+        try {
+            Invoke-Az ad app permission add --id $ClientId --api $GraphAppId --api-permissions `
+                '37f7f235-527c-4136-accd-4a02d197296e=Scope' `
+                '64a6cdd6-aab1-4aaf-94b8-3cc8405e90d0=Scope' `
+                '14dad69e-099b-42c9-810b-d002981feec1=Scope' `
+                '7427e0e9-2fba-42fe-b0c0-848c9e6a818b=Scope' `
+                'e1fe6dd8-ba31-4d61-89e7-88639da4683d=Scope' | Out-Null
+        } catch {
+            if ($_.Exception.Message -notmatch 'already exist') { throw }
+        }
 
-    Write-Host 'Creating client secret...'
-    $secretBody = @{ passwordCredential = @{ displayName = $ClientSecretName } } | ConvertTo-Json -Compress
-    $secretJson = Invoke-AzRestJson -Method POST -Url "https://graph.microsoft.com/v1.0/applications/$AppObjectId/addPassword" -Body $secretBody
-    $ClientSecret = $secretJson.secretText
-    $script:State['ClientSecret'] = '***'
+        Write-Host 'Creating client secret...'
+        $secretBody = @{ passwordCredential = @{ displayName = $ClientSecretName } } | ConvertTo-Json -Compress
+        $secretJson = Invoke-AzRestJson -Method POST -Url "https://graph.microsoft.com/v1.0/applications/$AppObjectId/addPassword" -Body $secretBody
+        $ClientSecret = $secretJson.secretText
+        $script:State['ClientSecret'] = '***'
+    }
 
     Write-Host 'Adding signed-in user as app owner...'
     try {
@@ -439,14 +525,17 @@ if ($SkipOidc -ne 'Yes') {
         Invoke-AzRestVoid -Method POST -Url "https://graph.microsoft.com/v1.0/servicePrincipals/$SpObjectId/owners/`$ref" -Body $ownerBody
     } catch { }
 
-    Write-Host 'Granting admin consent for delegated permissions...'
-    $consentBody = @{
-        clientId    = $SpObjectId
-        consentType = 'AllPrincipals'
-        resourceId  = $GraphSpId
-        scope       = 'email offline_access openid profile User.Read'
-    } | ConvertTo-Json -Compress
-    Invoke-AzRestJson -Method POST -Url 'https://graph.microsoft.com/v1.0/oauth2PermissionGrants' -Body $consentBody | Out-Null
+    # --- OIDC-specific: admin consent ---
+    if ($AuthProtocol -eq 'oidc') {
+        Write-Host 'Granting admin consent for delegated permissions...'
+        $consentBody = @{
+            clientId    = $SpObjectId
+            consentType = 'AllPrincipals'
+            resourceId  = $GraphSpId
+            scope       = 'email offline_access openid profile User.Read'
+        } | ConvertTo-Json -Compress
+        Invoke-AzRestJson -Method POST -Url 'https://graph.microsoft.com/v1.0/oauth2PermissionGrants' -Body $consentBody | Out-Null
+    }
 
     Write-Host 'Requiring user assignment on enterprise app...'
     $assignReqBody = @{ appRoleAssignmentRequired = $true } | ConvertTo-Json -Compress
@@ -508,6 +597,7 @@ if ($CreateScim -eq 'Yes') {
         # Mode 3: collect remaining prompts and create standalone SCIM app
         $ScimToken = Prompt-Value -Name 'SCIM_TOKEN' -Label 'Workbench SCIM bearer token' -Secret
         $StartScim = Prompt-YesNo -Name 'START_SCIM' -Label 'Start SCIM provisioning job now?' -Default 'No'
+        $EnableScimGroups = Prompt-YesNo -Name 'ENABLE_SCIM_GROUPS' -Label 'Enable SCIM group provisioning?' -Default 'Yes'
 
         Write-Host 'Creating SCIM enterprise application from Microsoft template...'
         $instantiateBody = @{ displayName = $ScimAppName } | ConvertTo-Json -Compress
@@ -572,6 +662,20 @@ if ($CreateScim -eq 'Yes') {
     } | ConvertTo-Json -Depth 3 -Compress
     Invoke-AzRestVoid -Method PUT -Url "https://graph.microsoft.com/v1.0/servicePrincipals/$ScimSpId/synchronization/secrets" -Body $secretsBody
 
+    if ($EnableScimGroups -eq 'Yes') {
+        Write-Host 'Enabling SCIM group provisioning...'
+        $schemaJson = Invoke-AzJson rest --method GET --url "https://graph.microsoft.com/v1.0/servicePrincipals/$ScimSpId/synchronization/jobs/$ScimJobId/schema"
+        foreach ($rule in $schemaJson.synchronizationRules) {
+            foreach ($mapping in $rule.objectMappings) {
+                if ($mapping.sourceObjectName -eq 'Group') {
+                    $mapping.enabled = $true
+                }
+            }
+        }
+        $updatedSchema = $schemaJson | ConvertTo-Json -Depth 20 -Compress
+        Invoke-AzRestVoid -Method PUT -Url "https://graph.microsoft.com/v1.0/servicePrincipals/$ScimSpId/synchronization/jobs/$ScimJobId/schema" -Body $updatedSchema
+    }
+
     if ($StartScim -eq 'Yes') {
         Write-Host 'Starting SCIM provisioning job...'
         Invoke-Az rest --method POST --url "https://graph.microsoft.com/v1.0/servicePrincipals/$ScimSpId/synchronization/jobs/$ScimJobId/start" | Out-Null
@@ -601,6 +705,22 @@ if ($CreateScim -eq 'Yes') {
 # --- Output emit functions ---
 
 function Emit-WorkbenchCommands {
+    $jitLines = ''
+    if ($EnableJit -eq 'Yes') {
+        $jitLines = "`nuser-provisioning-enabled=1`nuser-provisioning-register-on-first-login=1"
+        if ($IncludeGroups -eq 'Yes') {
+            $jitLines += "`nauth-openid-groups-claim=groups"
+        }
+    }
+    $scimLines = ''
+    if ($CreateScim -eq 'Yes') {
+        if ($EnableJit -ne 'Yes') {
+            $scimLines = "`nuser-provisioning-enabled=1"
+        }
+        if ($EnableScimGroups -eq 'Yes') {
+            $scimLines += "`ngroup-provisioning-start-gid=1000"
+        }
+    }
     Write-Host @"
 # Append OIDC settings to rserver.conf
 cat >> /etc/rstudio/rserver.conf <<'RSERVER'
@@ -608,7 +728,7 @@ cat >> /etc/rstudio/rserver.conf <<'RSERVER'
 # --- Entra ID OpenID Connect ---
 auth-openid=1
 auth-openid-issuer=$Issuer
-auth-openid-username-claim=preferred_username
+auth-openid-username-claim=preferred_username${jitLines}${scimLines}
 RSERVER
 
 # Create client credentials file
@@ -645,6 +765,59 @@ sudo systemctl restart rstudio-connect
 "@
 }
 
+function Emit-ConnectSamlCommands {
+    $groupsLine = if ($IncludeGroups -eq 'Yes') { "`nGroupsAutoProvision = true" } else { '' }
+    Write-Host @"
+# Set auth provider to saml
+sudo sed -i 's/^Provider = "password"/Provider = "saml"/' /etc/rstudio-connect/rstudio-connect.gcfg
+
+# Append SAML settings
+cat >> /etc/rstudio-connect/rstudio-connect.gcfg <<'GCFG'
+
+[SAML]
+IdPMetaDataURL = "$SamlMetadataUrl"
+IdPAttributeProfile = azure
+IdPSingleSignOnPostBinding = true${groupsLine}
+GCFG
+
+# Restart Connect
+sudo systemctl restart rstudio-connect
+"@
+}
+
+function Emit-WorkbenchSamlCommands {
+    $jitLines = ''
+    if ($EnableJit -eq 'Yes') {
+        $jitLines = "`nuser-provisioning-enabled=1`nuser-provisioning-register-on-first-login=1"
+        if ($IncludeGroups -eq 'Yes') {
+            $jitLines += "`nauth-saml-sp-attribute-groups=http://schemas.microsoft.com/ws/2008/06/identity/claims/groups"
+        }
+    }
+    $scimLines = ''
+    if ($CreateScim -eq 'Yes') {
+        if ($EnableJit -ne 'Yes') {
+            $scimLines = "`nuser-provisioning-enabled=1"
+        }
+        if ($EnableScimGroups -eq 'Yes') {
+            $scimLines += "`ngroup-provisioning-start-gid=1000"
+        }
+    }
+    Write-Host @"
+# Append SAML settings to rserver.conf
+cat >> /etc/rstudio/rserver.conf <<'RSERVER'
+
+# --- Entra ID SAML ---
+auth-saml=1
+auth-saml-metadata-url=$SamlMetadataUrl
+auth-saml-sp-name-id-format=emailaddress
+auth-saml-sp-attribute-username=NameID${jitLines}${scimLines}
+RSERVER
+
+# Restart Workbench
+sudo rstudio-server restart
+"@
+}
+
 function Emit-PackageManagerCommands {
     Write-Host @"
 # Set the server address for OIDC callback support
@@ -669,9 +842,29 @@ sudo systemctl restart rstudio-pm
 $Issuer = "https://login.microsoftonline.com/$TenantId/v2.0"
 
 if ($SkipOidc -ne 'Yes') {
-    Write-Host @"
+    if ($AuthProtocol -eq 'saml') {
+        Write-Host @"
 
-=== Entra ID registration complete for $($ProductConfig.Label) ===
+=== Entra ID SAML registration complete for $($ProductConfig.Label) ===
+
+Tenant ID:             $TenantId
+Client/App ID:         $ClientId
+Entity ID:             $SamlEntityId
+ACS URL:               $SamlAcsUrl
+Metadata URL:          $SamlMetadataUrl
+Enterprise App SP ID:  $SpObjectId
+
+App Registration:      https://portal.azure.com/#view/Microsoft_AAD_RegisteredApps/ApplicationMenuBlade/~/Overview/appId/$ClientId
+Enterprise App:        https://portal.azure.com/#view/Microsoft_AAD_IAM/ManagedAppMenuBlade/~/Overview/objectId/$SpObjectId/appId/$ClientId
+$ScimOutput
+Run the following commands on your $($ProductConfig.Label) server to configure SAML:
+==========================================================================
+
+"@
+    } else {
+        Write-Host @"
+
+=== Entra ID OIDC registration complete for $($ProductConfig.Label) ===
 
 Tenant ID:             $TenantId
 Client ID:             $ClientId
@@ -687,18 +880,41 @@ Run the following commands on your $($ProductConfig.Label) server to configure O
 ==========================================================================
 
 "@
+    }
 
     switch ($Product) {
-        'workbench'      { Emit-WorkbenchCommands }
-        'connect'        { Emit-ConnectCommands }
+        'workbench' {
+            if ($AuthProtocol -eq 'saml') { Emit-WorkbenchSamlCommands }
+            else { Emit-WorkbenchCommands }
+        }
+        'connect' {
+            if ($AuthProtocol -eq 'saml') { Emit-ConnectSamlCommands }
+            else { Emit-ConnectCommands }
+        }
         'packagemanager' { Emit-PackageManagerCommands }
     }
 } else {
+    $scimRserverLines = 'user-provisioning-enabled=1'
+    if ($EnableScimGroups -eq 'Yes') {
+        $scimRserverLines += "`ngroup-provisioning-start-gid=1000"
+    }
+
     Write-Host @"
 
 === SCIM-only configuration complete for $($ProductConfig.Label) ===
 
 Tenant ID: $TenantId
 $ScimOutput
+Run the following commands on your $($ProductConfig.Label) server to enable SCIM provisioning:
+==========================================================================
+
+# Append SCIM provisioning settings to rserver.conf
+cat >> /etc/rstudio/rserver.conf <<'RSERVER'
+
+$scimRserverLines
+RSERVER
+
+# Restart Workbench
+sudo rstudio-server restart
 "@
 }

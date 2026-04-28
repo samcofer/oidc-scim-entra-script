@@ -165,8 +165,9 @@ Collected information so far
 ============================
 
 Product:                ${PRODUCT:-}
+Auth protocol:          ${AUTH_PROTOCOL:-}
 Tenant ID:              ${TENANT_ID:-}
-Skip OIDC:              ${SKIP_OIDC:-}
+Skip auth:              ${SKIP_OIDC:-}
 
 OIDC:
   App name:             ${APP_NAME:-}
@@ -216,14 +217,60 @@ SCIM_TEMPLATE_ID="8adf8e6e-67b2-4cf2-a259-e3dc5476c621"
 
 select_product
 
+# --- Workbench mode pre-check (needed before auth protocol selection) ---
+SKIP_OIDC="No"
+CREATE_SCIM="No"
+WB_MODE_SCIM_ONLY="No"
+
+if [[ "$PRODUCT" == "workbench" && -n "${WB_MODE:-}" ]]; then
+  case "${WB_MODE,,}" in
+    3|scim) WB_MODE_SCIM_ONLY="Yes" ;;
+  esac
+fi
+
+# --- Auth protocol selection ---
+if [[ "$PRODUCT" == "packagemanager" ]]; then
+  AUTH_PROTOCOL="oidc"
+elif [[ "$WB_MODE_SCIM_ONLY" == "Yes" ]]; then
+  AUTH_PROTOCOL="scim-only"
+else
+  if [[ -n "${AUTH_PROTOCOL:-}" ]]; then
+    case "${AUTH_PROTOCOL,,}" in
+      1|oidc) AUTH_PROTOCOL="oidc" ;;
+      2|saml) AUTH_PROTOCOL="saml" ;;
+      *) echo "Invalid AUTH_PROTOCOL value: $AUTH_PROTOCOL. Use oidc or saml."; exit 1 ;;
+    esac
+  else
+    echo ""
+    echo "Select authentication protocol:"
+    echo "  1) OpenID Connect (OIDC)"
+    echo "  2) SAML"
+    echo ""
+    while true; do
+      read -rp "Protocol [1/2]: " proto_choice </dev/tty
+      echo
+      case "$proto_choice" in
+        1|oidc) AUTH_PROTOCOL="oidc"; break ;;
+        2|saml) AUTH_PROTOCOL="saml"; break ;;
+        *) echo "Please enter 1 or 2." ;;
+      esac
+    done
+  fi
+  export AUTH_PROTOCOL
+fi
+
 case "$PRODUCT" in
   workbench)
-    DEFAULT_APP_NAME="posit-workbench-oidc"
+    if [[ "$AUTH_PROTOCOL" == "scim-only" ]]; then
+      DEFAULT_APP_NAME="posit-workbench-scim"
+    else
+      DEFAULT_APP_NAME="posit-workbench-${AUTH_PROTOCOL}"
+    fi
     PRODUCT_LABEL="Posit Workbench"
     URL_EXAMPLE="https://workbench.example.com"
     ;;
   connect)
-    DEFAULT_APP_NAME="posit-connect-oidc"
+    DEFAULT_APP_NAME="posit-connect-${AUTH_PROTOCOL}"
     PRODUCT_LABEL="Posit Connect"
     URL_EXAMPLE="https://connect.example.com"
     ;;
@@ -235,22 +282,23 @@ case "$PRODUCT" in
 esac
 
 echo ""
-echo "Configuring Entra ID for $PRODUCT_LABEL"
+echo "Configuring Entra ID for $PRODUCT_LABEL ($AUTH_PROTOCOL)"
 echo "========================================"
 
 if [[ "$PRODUCT" == "workbench" ]]; then
   if [[ -n "${WB_MODE:-}" ]]; then
     case "${WB_MODE,,}" in
-      1|oidc-scim|oidc+scim) SKIP_OIDC="No";  CREATE_SCIM="Yes" ;;
-      2|oidc)                SKIP_OIDC="No";  CREATE_SCIM="No" ;;
-      3|scim)                SKIP_OIDC="Yes"; CREATE_SCIM="Yes" ;;
-      *) echo "Invalid WB_MODE value: $WB_MODE. Use oidc+scim, oidc, or scim."; exit 1 ;;
+      1|oidc-scim|oidc+scim|saml+scim|saml-scim) SKIP_OIDC="No";  CREATE_SCIM="Yes" ;;
+      2|oidc|saml)                                 SKIP_OIDC="No";  CREATE_SCIM="No" ;;
+      3|scim)                                      SKIP_OIDC="Yes"; CREATE_SCIM="Yes" ;;
+      *) echo "Invalid WB_MODE value: $WB_MODE. Use oidc+scim, saml+scim, oidc, saml, or scim."; exit 1 ;;
     esac
   else
+    auth_label="${AUTH_PROTOCOL^^}"
     echo ""
     echo "Select Workbench configuration mode:"
-    echo "  1) OIDC + SCIM provisioning"
-    echo "  2) OIDC only"
+    echo "  1) $auth_label + SCIM provisioning"
+    echo "  2) $auth_label only"
     echo "  3) SCIM provisioning only"
     echo ""
     while true; do
@@ -264,28 +312,13 @@ if [[ "$PRODUCT" == "workbench" ]]; then
       esac
     done
   fi
-else
-  SKIP_OIDC="No"
-  CREATE_SCIM="No"
 fi
 
 if [[ "$SKIP_OIDC" != "Yes" ]]; then
   prompt APP_NAME "App registration name" "$DEFAULT_APP_NAME"
   prompt_url BASE_URL "$PRODUCT_LABEL base URL" "$URL_EXAMPLE"
 
-  case "$PRODUCT" in
-    workbench)
-      DEFAULT_REDIRECT="${BASE_URL%/}/openid/callback"
-      REDIRECT_SUFFIX="/openid/callback"
-      ;;
-    connect|packagemanager)
-      DEFAULT_REDIRECT="${BASE_URL%/}/__login__/callback"
-      REDIRECT_SUFFIX="/__login__/callback"
-      ;;
-  esac
-
-  prompt_url REDIRECT_URI "OIDC redirect URI" "$DEFAULT_REDIRECT" "$REDIRECT_SUFFIX"
-  prompt CLIENT_SECRET_NAME "Client secret display name" "${APP_NAME}-secret"
+  # --- Common prompts ---
   prompt SIGNIN_AUDIENCE "Sign-in audience: AzureADMyOrg, AzureADMultipleOrgs" "AzureADMyOrg"
   yesno INCLUDE_GROUP_CLAIMS "Include group claims in ID/access tokens?" "Yes"
   prompt GROUP_CLAIMS "Group claim mode: SecurityGroup, All, DirectoryRole, ApplicationGroup, None" "SecurityGroup"
@@ -294,6 +327,35 @@ if [[ "$SKIP_OIDC" != "Yes" ]]; then
     GROUP_MEMBERSHIP_CLAIMS="$GROUP_CLAIMS"
   else
     GROUP_MEMBERSHIP_CLAIMS="None"
+  fi
+
+  # --- OIDC-specific prompts ---
+  if [[ "$AUTH_PROTOCOL" == "oidc" ]]; then
+    case "$PRODUCT" in
+      workbench)
+        DEFAULT_REDIRECT="${BASE_URL%/}/openid/callback"
+        REDIRECT_SUFFIX="/openid/callback"
+        ;;
+      connect|packagemanager)
+        DEFAULT_REDIRECT="${BASE_URL%/}/__login__/callback"
+        REDIRECT_SUFFIX="/__login__/callback"
+        ;;
+    esac
+    prompt_url REDIRECT_URI "OIDC redirect URI" "$DEFAULT_REDIRECT" "$REDIRECT_SUFFIX"
+    prompt CLIENT_SECRET_NAME "Client secret display name" "${APP_NAME}-secret"
+  fi
+
+  # --- SAML-specific computed values (ACS URL only; entity ID set after app creation) ---
+  if [[ "$AUTH_PROTOCOL" == "saml" ]]; then
+    case "$PRODUCT" in
+      workbench) SAML_ACS_URL="${BASE_URL%/}/saml/acs" ;;
+      connect)   SAML_ACS_URL="${BASE_URL%/}/__login__/saml/acs" ;;
+    esac
+  fi
+
+  # --- JIT provisioning prompt (Workbench only) ---
+  if [[ "$PRODUCT" == "workbench" ]]; then
+    yesno ENABLE_JIT "Enable JIT (Just-In-Time) user provisioning?" "No"
   fi
 
   # --- Collect SCIM prompts early for unified mode ---
@@ -316,12 +378,14 @@ if [[ "$SKIP_OIDC" != "Yes" ]]; then
     if [[ "$CREATE_SCIM" == "Yes" ]]; then
       prompt SCIM_TOKEN "Workbench SCIM bearer token" "" true
       yesno START_SCIM "Start SCIM provisioning job now?" "No"
+      yesno ENABLE_SCIM_GROUPS "Enable SCIM group provisioning?" "Yes"
     fi
   fi
 
-  # --- Create app registration ---
-  if [[ "$CREATE_SCIM" == "Yes" ]]; then
-    echo "Creating unified OIDC+SCIM app from Microsoft template..."
+  # --- Create app registration / enterprise app ---
+  if [[ "$AUTH_PROTOCOL" == "saml" || "$CREATE_SCIM" == "Yes" ]]; then
+    # SAML and SCIM both require template instantiation for enterprise app
+    echo "Creating enterprise application from Microsoft template..."
     TEMPLATE_JSON="$(az rest --method POST \
       --url "https://graph.microsoft.com/v1.0/applicationTemplates/$SCIM_TEMPLATE_ID/instantiate" \
       --headers "Content-Type=application/json" \
@@ -349,32 +413,62 @@ if [[ "$SKIP_OIDC" != "Yes" ]]; then
 
     APP_OBJECT_ID="$(az ad app show --id "$CLIENT_ID" --query id -o tsv)"
 
-    echo "Configuring app registration with OIDC settings..."
-    az rest --method PATCH \
-      --url "https://graph.microsoft.com/v1.0/applications/$APP_OBJECT_ID" \
-      --headers "Content-Type=application/json" \
-      --body "$(jq -n \
-        --arg audience "$SIGNIN_AUDIENCE" \
-        --arg uri "$REDIRECT_URI" \
-        --arg groups "$GROUP_MEMBERSHIP_CLAIMS" \
-        '{
-          signInAudience: $audience,
-          groupMembershipClaims: $groups,
-          web: {
-            redirectUris: [$uri],
-            implicitGrantSettings: {
-              enableIdTokenIssuance: true,
-              enableAccessTokenIssuance: false
+    if [[ "$AUTH_PROTOCOL" == "saml" ]]; then
+      SAML_ENTITY_ID="api://$CLIENT_ID"
+
+      echo "Configuring SAML on app registration..."
+      az rest --method PATCH \
+        --url "https://graph.microsoft.com/v1.0/applications/$APP_OBJECT_ID" \
+        --headers "Content-Type=application/json" \
+        --body "$(jq -n \
+          --arg entityId "$SAML_ENTITY_ID" \
+          --arg acsUrl "$SAML_ACS_URL" \
+          --arg groups "$GROUP_MEMBERSHIP_CLAIMS" \
+          '{
+            identifierUris: [$entityId],
+            groupMembershipClaims: $groups,
+            web: {
+              redirectUris: [$acsUrl]
             }
-          },
-          optionalClaims: {
-            idToken: [
-              {name: "email", essential: false},
-              {name: "preferred_username", essential: false}
-            ]
-          }
-        }')" \
-      >/dev/null
+          }')" \
+        >/dev/null
+
+      echo "Enabling SAML single sign-on on enterprise app..."
+      az rest --method PATCH \
+        --url "https://graph.microsoft.com/v1.0/servicePrincipals/$SP_OBJECT_ID" \
+        --headers "Content-Type=application/json" \
+        --body '{"preferredSingleSignOnMode": "saml"}' \
+        >/dev/null
+
+      SAML_METADATA_URL="https://login.microsoftonline.com/$TENANT_ID/federationmetadata/2007-06/federationmetadata.xml?appid=$CLIENT_ID"
+    else
+      echo "Configuring app registration with OIDC settings..."
+      az rest --method PATCH \
+        --url "https://graph.microsoft.com/v1.0/applications/$APP_OBJECT_ID" \
+        --headers "Content-Type=application/json" \
+        --body "$(jq -n \
+          --arg audience "$SIGNIN_AUDIENCE" \
+          --arg uri "$REDIRECT_URI" \
+          --arg groups "$GROUP_MEMBERSHIP_CLAIMS" \
+          '{
+            signInAudience: $audience,
+            groupMembershipClaims: $groups,
+            web: {
+              redirectUris: [$uri],
+              implicitGrantSettings: {
+                enableIdTokenIssuance: true,
+                enableAccessTokenIssuance: false
+              }
+            },
+            optionalClaims: {
+              idToken: [
+                {name: "email", essential: false},
+                {name: "preferred_username", essential: false}
+              ]
+            }
+          }')" \
+        >/dev/null
+    fi
   else
     echo "Creating OIDC app registration..."
     APP_JSON="$(az rest --method POST \
@@ -411,28 +505,31 @@ if [[ "$SKIP_OIDC" != "Yes" ]]; then
 
   set_app_logo "$APP_OBJECT_ID"
 
-  echo "Adding OpenID delegated permissions..."
-  if ! perm_output="$(az ad app permission add --id "$CLIENT_ID" --api "$GRAPH_APP_ID" --api-permissions \
-    "37f7f235-527c-4136-accd-4a02d197296e=Scope" \
-    "64a6cdd6-aab1-4aaf-94b8-3cc8405e90d0=Scope" \
-    "14dad69e-099b-42c9-810b-d002981feec1=Scope" \
-    "7427e0e9-2fba-42fe-b0c0-848c9e6a818b=Scope" \
-    "e1fe6dd8-ba31-4d61-89e7-88639da4683d=Scope" 2>&1)"; then
-    if [[ "$perm_output" != *"already exist"* ]]; then
-      echo "Failed to add permissions: $perm_output" >&2
-      exit 1
+  # --- OIDC-specific: delegated permissions + client secret ---
+  if [[ "$AUTH_PROTOCOL" == "oidc" ]]; then
+    echo "Adding OpenID delegated permissions..."
+    if ! perm_output="$(az ad app permission add --id "$CLIENT_ID" --api "$GRAPH_APP_ID" --api-permissions \
+      "37f7f235-527c-4136-accd-4a02d197296e=Scope" \
+      "64a6cdd6-aab1-4aaf-94b8-3cc8405e90d0=Scope" \
+      "14dad69e-099b-42c9-810b-d002981feec1=Scope" \
+      "7427e0e9-2fba-42fe-b0c0-848c9e6a818b=Scope" \
+      "e1fe6dd8-ba31-4d61-89e7-88639da4683d=Scope" 2>&1)"; then
+      if [[ "$perm_output" != *"already exist"* ]]; then
+        echo "Failed to add permissions: $perm_output" >&2
+        exit 1
+      fi
     fi
+
+    echo "Creating client secret..."
+    SECRET_JSON="$(az rest --method POST \
+      --url "https://graph.microsoft.com/v1.0/applications/$APP_OBJECT_ID/addPassword" \
+      --headers "Content-Type=application/json" \
+      --body "$(jq -n --arg name "$CLIENT_SECRET_NAME" \
+        '{passwordCredential: {displayName: $name}}')" \
+      -o json 2>/dev/null)"
+
+    CLIENT_SECRET="$(jq -r '.secretText' <<<"$SECRET_JSON")"
   fi
-
-  echo "Creating client secret..."
-  SECRET_JSON="$(az rest --method POST \
-    --url "https://graph.microsoft.com/v1.0/applications/$APP_OBJECT_ID/addPassword" \
-    --headers "Content-Type=application/json" \
-    --body "$(jq -n --arg name "$CLIENT_SECRET_NAME" \
-      '{passwordCredential: {displayName: $name}}')" \
-    -o json 2>/dev/null)"
-
-  CLIENT_SECRET="$(jq -r '.secretText' <<<"$SECRET_JSON")"
 
   echo "Adding signed-in user as app owner..."
   az rest --method POST \
@@ -460,20 +557,23 @@ if [[ "$SKIP_OIDC" != "Yes" ]]; then
     --body "$(jq -n --arg id "https://graph.microsoft.com/v1.0/directoryObjects/$SIGNED_IN_USER" \
       '{"@odata.id": $id}')" >/dev/null 2>&1 || true
 
-  echo "Granting admin consent for delegated permissions..."
-  az rest --method POST \
-    --url "https://graph.microsoft.com/v1.0/oauth2PermissionGrants" \
-    --headers "Content-Type=application/json" \
-    --body "$(jq -n \
-      --arg clientId "$SP_OBJECT_ID" \
-      --arg resourceId "$GRAPH_SP_ID" \
-      '{
-        clientId: $clientId,
-        consentType: "AllPrincipals",
-        resourceId: $resourceId,
-        scope: "email offline_access openid profile User.Read"
-      }')" \
-    -o json >/dev/null
+  # --- OIDC-specific: admin consent ---
+  if [[ "$AUTH_PROTOCOL" == "oidc" ]]; then
+    echo "Granting admin consent for delegated permissions..."
+    az rest --method POST \
+      --url "https://graph.microsoft.com/v1.0/oauth2PermissionGrants" \
+      --headers "Content-Type=application/json" \
+      --body "$(jq -n \
+        --arg clientId "$SP_OBJECT_ID" \
+        --arg resourceId "$GRAPH_SP_ID" \
+        '{
+          clientId: $clientId,
+          consentType: "AllPrincipals",
+          resourceId: $resourceId,
+          scope: "email offline_access openid profile User.Read"
+        }')" \
+      -o json >/dev/null
+  fi
 
   echo "Requiring user assignment on enterprise app..."
   az rest --method PATCH \
@@ -536,6 +636,7 @@ if [[ "$CREATE_SCIM" == "Yes" ]]; then
     # Mode 3: collect remaining prompts and create standalone SCIM app
     prompt SCIM_TOKEN "Workbench SCIM bearer token" "" true
     yesno START_SCIM "Start SCIM provisioning job now?" "No"
+    yesno ENABLE_SCIM_GROUPS "Enable SCIM group provisioning?" "Yes"
 
     echo "Creating SCIM enterprise application from Microsoft template..."
     SCIM_APP_JSON="$(az rest --method POST \
@@ -610,6 +711,26 @@ if [[ "$CREATE_SCIM" == "Yes" ]]; then
       ]
     }')" >/dev/null
 
+  if [[ "${ENABLE_SCIM_GROUPS:-}" == "Yes" ]]; then
+    echo "Enabling SCIM group provisioning..."
+    SCHEMA_JSON="$(az rest --method GET \
+      --url "https://graph.microsoft.com/v1.0/servicePrincipals/$SCIM_SP_ID/synchronization/jobs/$SCIM_JOB_ID/schema" \
+      -o json)"
+
+    UPDATED_SCHEMA="$(echo "$SCHEMA_JSON" | jq '
+      .synchronizationRules[].objectMappings |= map(
+        if .sourceObjectName == "Group" then .enabled = true else . end
+      )')"
+
+    SCHEMA_TMPFILE="$(mktemp)"
+    echo "$UPDATED_SCHEMA" > "$SCHEMA_TMPFILE"
+    az rest --method PUT \
+      --url "https://graph.microsoft.com/v1.0/servicePrincipals/$SCIM_SP_ID/synchronization/jobs/$SCIM_JOB_ID/schema" \
+      --headers "Content-Type=application/json" \
+      --body "@$SCHEMA_TMPFILE" >/dev/null
+    rm -f "$SCHEMA_TMPFILE"
+  fi
+
   if [[ "$START_SCIM" == "Yes" ]]; then
     echo "Starting SCIM provisioning job..."
     az rest --method POST \
@@ -641,6 +762,24 @@ fi
 ISSUER="https://login.microsoftonline.com/$TENANT_ID/v2.0"
 
 emit_workbench_commands() {
+  local jit_lines=""
+  if [[ "${ENABLE_JIT:-}" == "Yes" ]]; then
+    jit_lines=$'\nuser-provisioning-enabled=1\nuser-provisioning-register-on-first-login=1'
+    if [[ "${INCLUDE_GROUP_CLAIMS:-}" == "Yes" ]]; then
+      jit_lines+=$'\nauth-openid-groups-claim=groups'
+    fi
+  fi
+
+  local scim_lines=""
+  if [[ "${CREATE_SCIM:-}" == "Yes" ]]; then
+    if [[ "${ENABLE_JIT:-}" != "Yes" ]]; then
+      scim_lines=$'\nuser-provisioning-enabled=1'
+    fi
+    if [[ "${ENABLE_SCIM_GROUPS:-}" == "Yes" ]]; then
+      scim_lines+=$'\ngroup-provisioning-start-gid=1000'
+    fi
+  fi
+
   cat <<EOF
 # Append OIDC settings to rserver.conf
 cat >> /etc/rstudio/rserver.conf <<'RSERVER'
@@ -648,7 +787,7 @@ cat >> /etc/rstudio/rserver.conf <<'RSERVER'
 # --- Entra ID OpenID Connect ---
 auth-openid=1
 auth-openid-issuer=$ISSUER
-auth-openid-username-claim=preferred_username
+auth-openid-username-claim=preferred_username${jit_lines}${scim_lines}
 RSERVER
 
 # Create client credentials file
@@ -689,6 +828,65 @@ sudo systemctl restart rstudio-connect
 EOF
 }
 
+emit_connect_saml_commands() {
+  local groups_line=""
+  if [[ "$INCLUDE_GROUP_CLAIMS" == "Yes" ]]; then
+    groups_line=$'\nGroupsAutoProvision = true'
+  fi
+
+  cat <<EOF
+# Set auth provider to saml
+sudo sed -i 's/^Provider = "password"/Provider = "saml"/' /etc/rstudio-connect/rstudio-connect.gcfg
+
+# Append SAML settings
+cat >> /etc/rstudio-connect/rstudio-connect.gcfg <<'GCFG'
+
+[SAML]
+IdPMetaDataURL = "$SAML_METADATA_URL"
+IdPAttributeProfile = azure
+IdPSingleSignOnPostBinding = true${groups_line}
+GCFG
+
+# Restart Connect
+sudo systemctl restart rstudio-connect
+EOF
+}
+
+emit_workbench_saml_commands() {
+  local jit_lines=""
+  if [[ "${ENABLE_JIT:-}" == "Yes" ]]; then
+    jit_lines=$'\nuser-provisioning-enabled=1\nuser-provisioning-register-on-first-login=1'
+    if [[ "${INCLUDE_GROUP_CLAIMS:-}" == "Yes" ]]; then
+      jit_lines+=$'\nauth-saml-sp-attribute-groups=http://schemas.microsoft.com/ws/2008/06/identity/claims/groups'
+    fi
+  fi
+
+  local scim_lines=""
+  if [[ "${CREATE_SCIM:-}" == "Yes" ]]; then
+    if [[ "${ENABLE_JIT:-}" != "Yes" ]]; then
+      scim_lines=$'\nuser-provisioning-enabled=1'
+    fi
+    if [[ "${ENABLE_SCIM_GROUPS:-}" == "Yes" ]]; then
+      scim_lines+=$'\ngroup-provisioning-start-gid=1000'
+    fi
+  fi
+
+  cat <<EOF
+# Append SAML settings to rserver.conf
+cat >> /etc/rstudio/rserver.conf <<'RSERVER'
+
+# --- Entra ID SAML ---
+auth-saml=1
+auth-saml-metadata-url=$SAML_METADATA_URL
+auth-saml-sp-name-id-format=emailaddress
+auth-saml-sp-attribute-username=NameID${jit_lines}${scim_lines}
+RSERVER
+
+# Restart Workbench
+sudo rstudio-server restart
+EOF
+}
+
 emit_packagemanager_commands() {
   cat <<EOF
 # Set the server address for OIDC callback support
@@ -709,9 +907,29 @@ EOF
 }
 
 if [[ "$SKIP_OIDC" != "Yes" ]]; then
-  cat <<EOF
+  if [[ "$AUTH_PROTOCOL" == "saml" ]]; then
+    cat <<EOF
 
-=== Entra ID registration complete for $PRODUCT_LABEL ===
+=== Entra ID SAML registration complete for $PRODUCT_LABEL ===
+
+Tenant ID:             $TENANT_ID
+Client/App ID:         $CLIENT_ID
+Entity ID:             $SAML_ENTITY_ID
+ACS URL:               $SAML_ACS_URL
+Metadata URL:          $SAML_METADATA_URL
+Enterprise App SP ID:  $SP_OBJECT_ID
+
+App Registration:      https://portal.azure.com/#view/Microsoft_AAD_RegisteredApps/ApplicationMenuBlade/~/Overview/appId/$CLIENT_ID
+Enterprise App:        https://portal.azure.com/#view/Microsoft_AAD_IAM/ManagedAppMenuBlade/~/Overview/objectId/$SP_OBJECT_ID/appId/$CLIENT_ID
+$SCIM_OUTPUT
+Run the following commands on your $PRODUCT_LABEL server to configure SAML:
+==========================================================================
+
+EOF
+  else
+    cat <<EOF
+
+=== Entra ID OIDC registration complete for $PRODUCT_LABEL ===
 
 Tenant ID:             $TENANT_ID
 Client ID:             $CLIENT_ID
@@ -727,18 +945,47 @@ Run the following commands on your $PRODUCT_LABEL server to configure OIDC:
 ==========================================================================
 
 EOF
+  fi
 
   case "$PRODUCT" in
-    workbench)      emit_workbench_commands ;;
-    connect)        emit_connect_commands ;;
+    workbench)
+      if [[ "$AUTH_PROTOCOL" == "saml" ]]; then
+        emit_workbench_saml_commands
+      else
+        emit_workbench_commands
+      fi
+      ;;
+    connect)
+      if [[ "$AUTH_PROTOCOL" == "saml" ]]; then
+        emit_connect_saml_commands
+      else
+        emit_connect_commands
+      fi
+      ;;
     packagemanager) emit_packagemanager_commands ;;
   esac
 else
+  SCIM_RSERVER_LINES="user-provisioning-enabled=1"
+  if [[ "${ENABLE_SCIM_GROUPS:-}" == "Yes" ]]; then
+    SCIM_RSERVER_LINES+=$'\ngroup-provisioning-start-gid=1000'
+  fi
+
   cat <<EOF
 
 === SCIM-only configuration complete for $PRODUCT_LABEL ===
 
 Tenant ID: $TENANT_ID
 $SCIM_OUTPUT
+Run the following commands on your $PRODUCT_LABEL server to enable SCIM provisioning:
+==========================================================================
+
+# Append SCIM provisioning settings to rserver.conf
+cat >> /etc/rstudio/rserver.conf <<'RSERVER'
+
+$SCIM_RSERVER_LINES
+RSERVER
+
+# Restart Workbench
+sudo rstudio-server restart
 EOF
 fi
