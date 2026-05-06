@@ -731,11 +731,14 @@ auth-openid-issuer=$Issuer
 auth-openid-username-claim=preferred_username${jitLines}${scimLines}
 RSERVER
 
+# Encrypt the client secret
+ENCRYPTED_SECRET=`$(printf '%s' '$ClientSecret' | sudo rstudio-server encrypt-password)
+
 # Create client credentials file
-cat > /etc/rstudio/openid-client-secret <<'SECRET'
+cat > /etc/rstudio/openid-client-secret <<CREDENTIALS
 client-id=$ClientId
-client-secret=$ClientSecret
-SECRET
+client-secret=`$ENCRYPTED_SECRET
+CREDENTIALS
 chmod 0600 /etc/rstudio/openid-client-secret
 
 # Restart Workbench
@@ -746,15 +749,19 @@ sudo rstudio-server restart
 function Emit-ConnectCommands {
     $groupsLines = if ($IncludeGroups -eq 'Yes') { "`nGroupsAutoProvision = true`nGroupsClaim = `"groups`"" } else { '' }
     Write-Host @"
-# Change auth provider from password to oauth2
-sudo sed -i 's/^Provider = "password"/Provider = "oauth2"/' /etc/rstudio-connect/rstudio-connect.gcfg
+# Comment out existing Provider line and add oauth2 provider
+sudo sed -i '/^Provider/{ s/^/; /; a\Provider = "oauth2"
+}' /etc/rstudio-connect/rstudio-connect.gcfg
+
+# Encrypt the client secret
+ENCRYPTED_SECRET=`$(printf '%s' '$ClientSecret' | /opt/rstudio-connect/bin/rscadmin encrypt-config-value)
 
 # Append OAuth2 settings
-cat >> /etc/rstudio-connect/rstudio-connect.gcfg <<'GCFG'
+cat >> /etc/rstudio-connect/rstudio-connect.gcfg <<GCFG
 
 [OAuth2]
 ClientId = "$ClientId"
-ClientSecret = "$ClientSecret"
+ClientSecret = "`$ENCRYPTED_SECRET"
 OpenIDConnectIssuer = "$Issuer"
 RequireUsernameClaim = true
 UsernameClaim = "preferred_username"${groupsLines}
@@ -768,8 +775,9 @@ sudo systemctl restart rstudio-connect
 function Emit-ConnectSamlCommands {
     $groupsLine = if ($IncludeGroups -eq 'Yes') { "`nGroupsAutoProvision = true" } else { '' }
     Write-Host @"
-# Set auth provider to saml
-sudo sed -i 's/^Provider = "password"/Provider = "saml"/' /etc/rstudio-connect/rstudio-connect.gcfg
+# Comment out existing Provider line and add saml provider
+sudo sed -i '/^Provider/{ s/^/; /; a\Provider = "saml"
+}' /etc/rstudio-connect/rstudio-connect.gcfg
 
 # Append SAML settings
 cat >> /etc/rstudio-connect/rstudio-connect.gcfg <<'GCFG'
@@ -823,13 +831,16 @@ function Emit-PackageManagerCommands {
 # Set the server address for OIDC callback support
 sudo sed -i 's|^; Address = "http://posit-connect.example.com"|Address = "$BaseUrl"|' /etc/rstudio-pm/rstudio-pm.gcfg
 
+# Encrypt the client secret
+ENCRYPTED_SECRET=`$(printf '%s' '$ClientSecret' | /opt/rstudio-pm/bin/rspm encrypt)
+
 # Append OpenID Connect settings
-cat >> /etc/rstudio-pm/rstudio-pm.gcfg <<'GCFG'
+cat >> /etc/rstudio-pm/rstudio-pm.gcfg <<GCFG
 
 [OpenIDConnect]
 Issuer = "$Issuer"
 ClientId = "$ClientId"
-ClientSecret = "$ClientSecret"
+ClientSecret = "`$ENCRYPTED_SECRET"
 GCFG
 
 # Restart Package Manager

@@ -790,11 +790,14 @@ auth-openid-issuer=$ISSUER
 auth-openid-username-claim=preferred_username${jit_lines}${scim_lines}
 RSERVER
 
+# Encrypt the client secret
+ENCRYPTED_SECRET=\$(printf '%s' '$CLIENT_SECRET' | sudo rstudio-server encrypt-password)
+
 # Create client credentials file
-cat > /etc/rstudio/openid-client-secret <<'SECRET'
+cat > /etc/rstudio/openid-client-secret <<CREDENTIALS
 client-id=$CLIENT_ID
-client-secret=$CLIENT_SECRET
-SECRET
+client-secret=\$ENCRYPTED_SECRET
+CREDENTIALS
 chmod 0600 /etc/rstudio/openid-client-secret
 
 # Restart Workbench
@@ -809,15 +812,19 @@ emit_connect_commands() {
   fi
 
   cat <<EOF
-# Change auth provider from password to oauth2
-sudo sed -i 's/^Provider = "password"/Provider = "oauth2"/' /etc/rstudio-connect/rstudio-connect.gcfg
+# Comment out existing Provider line and add oauth2 provider
+sudo sed -i '/^Provider/{ s/^/; /; a\Provider = "oauth2"
+}' /etc/rstudio-connect/rstudio-connect.gcfg
+
+# Encrypt the client secret
+ENCRYPTED_SECRET=\$(printf '%s' '$CLIENT_SECRET' | /opt/rstudio-connect/bin/rscadmin encrypt-config-value)
 
 # Append OAuth2 settings
-cat >> /etc/rstudio-connect/rstudio-connect.gcfg <<'GCFG'
+cat >> /etc/rstudio-connect/rstudio-connect.gcfg <<GCFG
 
 [OAuth2]
 ClientId = "$CLIENT_ID"
-ClientSecret = "$CLIENT_SECRET"
+ClientSecret = "\$ENCRYPTED_SECRET"
 OpenIDConnectIssuer = "$ISSUER"
 RequireUsernameClaim = true
 UsernameClaim = "preferred_username"${groups_lines}
@@ -835,8 +842,9 @@ emit_connect_saml_commands() {
   fi
 
   cat <<EOF
-# Set auth provider to saml
-sudo sed -i 's/^Provider = "password"/Provider = "saml"/' /etc/rstudio-connect/rstudio-connect.gcfg
+# Comment out existing Provider line and add saml provider
+sudo sed -i '/^Provider/{ s/^/; /; a\Provider = "saml"
+}' /etc/rstudio-connect/rstudio-connect.gcfg
 
 # Append SAML settings
 cat >> /etc/rstudio-connect/rstudio-connect.gcfg <<'GCFG'
@@ -892,13 +900,16 @@ emit_packagemanager_commands() {
 # Set the server address for OIDC callback support
 sudo sed -i 's|^; Address = "http://posit-connect.example.com"|Address = "$BASE_URL"|' /etc/rstudio-pm/rstudio-pm.gcfg
 
+# Encrypt the client secret
+ENCRYPTED_SECRET=\$(printf '%s' '$CLIENT_SECRET' | /opt/rstudio-pm/bin/rspm encrypt)
+
 # Append OpenID Connect settings
-cat >> /etc/rstudio-pm/rstudio-pm.gcfg <<'GCFG'
+cat >> /etc/rstudio-pm/rstudio-pm.gcfg <<GCFG
 
 [OpenIDConnect]
 Issuer = "$ISSUER"
 ClientId = "$CLIENT_ID"
-ClientSecret = "$CLIENT_SECRET"
+ClientSecret = "\$ENCRYPTED_SECRET"
 GCFG
 
 # Restart Package Manager
