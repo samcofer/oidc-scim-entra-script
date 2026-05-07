@@ -84,7 +84,7 @@ PS1 is tested from WSL via:
 ```bash
 PWSH="/mnt/c/Users/samco/AppData/Local/Microsoft/WindowsApps/Microsoft.PowerShell_8wekyb3d8bbwe/pwsh.exe"
 # Copy script to Windows filesystem first
-cp posit-oidc-scim-entra-configuration.ps1 /mnt/c/Users/samco/
+cp posit-entra-auth.ps1 /mnt/c/Users/samco/
 "$PWSH" -NoProfile -Command '
 $env:PATH += ";C:\Program Files\Microsoft SDKs\Azure\CLI2\wbin"
 $env:PRODUCT = "connect"
@@ -94,6 +94,6 @@ $env:BASE_URL = "https://connect.test.example.com"
 $env:SIGNIN_AUDIENCE = "AzureADMyOrg"
 $env:INCLUDE_GROUP_CLAIMS = "Yes"
 $env:GROUP_CLAIMS = "SecurityGroup"
-& "C:\Users\samco\posit-oidc-scim-entra-configuration.ps1"
+& "C:\Users\samco\posit-entra-auth.ps1"
 '
 ```

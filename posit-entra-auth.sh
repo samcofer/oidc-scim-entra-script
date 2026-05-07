@@ -579,7 +579,7 @@ if [[ "$SKIP_OIDC" != "Yes" ]]; then
   az rest --method PATCH \
     --url "https://graph.microsoft.com/v1.0/servicePrincipals/$SP_OBJECT_ID" \
     --headers "Content-Type=application/json" \
-    --body "$(jq -n '{appRoleAssignmentRequired: true}')" \
+    --body "$(jq -n '{appRoleAssignmentRequired: true, tags: ["WindowsAzureActiveDirectoryIntegratedApp"]}')" \
     >/dev/null
 
   echo "Assigning signed-in user to enterprise app..."
@@ -677,6 +677,13 @@ if [[ "$CREATE_SCIM" == "Yes" ]]; then
       --headers "Content-Type=application/json" \
       --body "$(jq -n --arg id "https://graph.microsoft.com/v1.0/directoryObjects/$SIGNED_IN_USER" \
         '{"@odata.id": $id}')" >/dev/null 2>&1 || true
+
+    echo "Tagging SCIM app as enterprise application..."
+    az rest --method PATCH \
+      --url "https://graph.microsoft.com/v1.0/servicePrincipals/$SCIM_SP_ID" \
+      --headers "Content-Type=application/json" \
+      --body "$(jq -n '{tags: ["WindowsAzureActiveDirectoryIntegratedApp"]}')" \
+      >/dev/null
   else
     # Mode 1 (OIDC+SCIM unified): reuse the already-created SP
     SCIM_SP_ID="$SP_OBJECT_ID"

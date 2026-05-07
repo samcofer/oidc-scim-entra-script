@@ -14,13 +14,13 @@ SCIM provisioning is only supported for Posit Workbench. For Workbench, SCIM can
 
 ## Prerequisites
 
-### Bash (`posit-oidc-scim-entra-configuration.sh`)
+### Bash (`posit-entra-auth.sh`)
 
 - Bash 4+
 - [Azure CLI](https://learn.microsoft.com/en-us/cli/azure/install-azure-cli) (`az`) logged in with sufficient Entra ID permissions
 - `jq`
 
-### PowerShell (`posit-oidc-scim-entra-configuration.ps1`)
+### PowerShell (`posit-entra-auth.ps1`)
 
 - PowerShell 7.0+
 - [Azure CLI](https://learn.microsoft.com/en-us/cli/azure/install-azure-cli) (`az`) in PATH and logged in
@@ -44,12 +44,12 @@ Run directly from the Azure Cloud Shell without cloning the repo:
 
 **Bash** (Cloud Shell default):
 ```bash
-bash <(curl -sL https://raw.githubusercontent.com/samcofer/oidc-scim-entra-script/main/posit-oidc-scim-entra-configuration.sh)
+bash <(curl -sL https://raw.githubusercontent.com/samcofer/posit-entra-auth/main/posit-entra-auth.sh)
 ```
 
 **PowerShell** (Cloud Shell PowerShell mode):
 ```powershell
-Invoke-Expression (Invoke-RestMethod https://raw.githubusercontent.com/samcofer/oidc-scim-entra-script/main/posit-oidc-scim-entra-configuration.ps1)
+Invoke-Expression (Invoke-RestMethod https://raw.githubusercontent.com/samcofer/posit-entra-auth/main/posit-entra-auth.ps1)
 ```
 
 Azure Cloud Shell comes pre-authenticated with `az` and includes `jq`, so no additional setup is needed.
@@ -62,10 +62,10 @@ Run the script and follow the prompts:
 
 ```bash
 # Bash
-./posit-oidc-scim-entra-configuration.sh
+./posit-entra-auth.sh
 
 # PowerShell
-pwsh ./posit-oidc-scim-entra-configuration.ps1
+pwsh ./posit-entra-auth.ps1
 ```
 
 ### Non-Interactive (Environment Variables)
@@ -83,7 +83,7 @@ export SIGNIN_AUDIENCE=AzureADMyOrg
 export INCLUDE_GROUP_CLAIMS=Yes
 export GROUP_CLAIMS=SecurityGroup
 
-./posit-oidc-scim-entra-configuration.sh
+./posit-entra-auth.sh
 ```
 
 ## Environment Variables
@@ -224,12 +224,66 @@ Both scripts collect state as they progress. If the script fails at any point, a
 ```
 .
 ├── README.md
-├── posit-oidc-scim-entra-configuration.sh    # Bash script (Linux/macOS)
-├── posit-oidc-scim-entra-configuration.ps1   # PowerShell 7 script (Windows)
+├── posit-entra-auth.sh    # Bash script (Linux/macOS)
+├── posit-entra-auth.ps1   # PowerShell 7 script (Windows)
 └── default-configurations/                    # Reference copies of default product config files
     ├── rserver.conf                           # Default Posit Workbench config
     └── rstudio-connect.gcfg                   # Default Posit Connect config
 ```
+
+## Testing
+
+Both scripts can be tested non-interactively by setting all prompt variables via environment variables. Use a distinctive app name prefix (e.g., `test-wb-`, `test-ct-`) for easy cleanup.
+
+### Bash (Workbench OIDC example)
+
+```bash
+PRODUCT=workbench AUTH_PROTOCOL=oidc WB_MODE=oidc \
+  APP_NAME="test-wb-oidc" BASE_URL="https://workbench.example.com" \
+  CLIENT_SECRET_NAME="test-wb-oidc-secret" ENABLE_JIT=no \
+  INCLUDE_GROUP_CLAIMS=no GROUP_CLAIMS=None SIGNIN_AUDIENCE=AzureADMyOrg \
+  REDIRECT_URI="https://workbench.example.com/openid/callback" \
+  bash posit-entra-auth.sh
+```
+
+### Bash (Connect OIDC example)
+
+```bash
+PRODUCT=connect AUTH_PROTOCOL=oidc \
+  APP_NAME="test-ct-oidc" BASE_URL="https://connect.example.com" \
+  CLIENT_SECRET_NAME="test-ct-oidc-secret" \
+  INCLUDE_GROUP_CLAIMS=no GROUP_CLAIMS=None SIGNIN_AUDIENCE=AzureADMyOrg \
+  REDIRECT_URI="https://connect.example.com/__login__/callback" \
+  bash posit-entra-auth.sh
+```
+
+### PowerShell (Workbench OIDC example)
+
+```powershell
+$env:PRODUCT = "workbench"; $env:AUTH_PROTOCOL = "oidc"; $env:WB_MODE = "oidc"
+$env:APP_NAME = "test-wb-oidc"; $env:BASE_URL = "https://workbench.example.com"
+$env:CLIENT_SECRET_NAME = "test-wb-oidc-secret"; $env:ENABLE_JIT = "no"
+$env:INCLUDE_GROUP_CLAIMS = "no"; $env:GROUP_CLAIMS = "None"
+$env:SIGNIN_AUDIENCE = "AzureADMyOrg"
+$env:REDIRECT_URI = "https://workbench.example.com/openid/callback"
+& ./posit-entra-auth.ps1
+```
+
+### Required Environment Variables
+
+| Variable | Products | Description |
+|----------|----------|-------------|
+| `PRODUCT` | All | `workbench`, `connect`, or `packagemanager` |
+| `AUTH_PROTOCOL` | All | `oidc` or `saml` |
+| `APP_NAME` | All | App registration display name |
+| `BASE_URL` | All | Product base URL |
+| `CLIENT_SECRET_NAME` | OIDC | Client secret display name |
+| `SIGNIN_AUDIENCE` | All | `AzureADMyOrg` or `AzureADMultipleOrgs` |
+| `INCLUDE_GROUP_CLAIMS` | All | `yes` or `no` |
+| `GROUP_CLAIMS` | All | `SecurityGroup`, `All`, `None`, etc. |
+| `REDIRECT_URI` | OIDC | Full OAuth2 callback URL |
+| `WB_MODE` | Workbench | `oidc`, `oidc+scim`, `saml`, `saml+scim`, or `scim` |
+| `ENABLE_JIT` | Workbench | `yes` or `no` |
 
 ## Cleanup
 

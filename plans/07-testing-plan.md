@@ -32,7 +32,7 @@ BASE_URL=https://connect.test.example.com \
 SIGNIN_AUDIENCE=AzureADMyOrg \
 INCLUDE_GROUP_CLAIMS=Yes \
 GROUP_CLAIMS=SecurityGroup \
-bash posit-oidc-scim-entra-configuration.sh
+bash posit-entra-auth.sh
 ```
 
 ### Test 2: Connect OIDC (bash) — regression test
@@ -46,7 +46,7 @@ CLIENT_SECRET_NAME=bash-test-con-oidc-secret \
 SIGNIN_AUDIENCE=AzureADMyOrg \
 INCLUDE_GROUP_CLAIMS=Yes \
 GROUP_CLAIMS=SecurityGroup \
-bash posit-oidc-scim-entra-configuration.sh
+bash posit-entra-auth.sh
 ```
 
 ### Test 3: Workbench SAML+SCIM+JIT+Groups (bash)
@@ -65,7 +65,7 @@ SCIM_CONNECTIVITY_CONFIRMED=Yes \
 SCIM_TOKEN=fake-token-for-testing \
 START_SCIM=No \
 ENABLE_SCIM_GROUPS=Yes \
-bash posit-oidc-scim-entra-configuration.sh
+bash posit-entra-auth.sh
 ```
 
 ### Test 4: Workbench SAML-only+JIT (bash)
@@ -79,7 +79,7 @@ SIGNIN_AUDIENCE=AzureADMyOrg \
 INCLUDE_GROUP_CLAIMS=Yes \
 GROUP_CLAIMS=SecurityGroup \
 ENABLE_JIT=Yes \
-bash posit-oidc-scim-entra-configuration.sh
+bash posit-entra-auth.sh
 ```
 
 ### Test 5: Workbench OIDC+SCIM+JIT+Groups (bash) — regression + new JIT/groups
@@ -100,7 +100,7 @@ SCIM_CONNECTIVITY_CONFIRMED=Yes \
 SCIM_TOKEN=fake-token-for-testing \
 START_SCIM=No \
 ENABLE_SCIM_GROUPS=Yes \
-bash posit-oidc-scim-entra-configuration.sh
+bash posit-entra-auth.sh
 ```
 
 ### Test 6: Workbench OIDC-only (bash) — regression
@@ -116,7 +116,7 @@ SIGNIN_AUDIENCE=AzureADMyOrg \
 INCLUDE_GROUP_CLAIMS=No \
 GROUP_CLAIMS=None \
 ENABLE_JIT=No \
-bash posit-oidc-scim-entra-configuration.sh
+bash posit-entra-auth.sh
 ```
 
 ### Test 7: Workbench SCIM-only+Groups (bash) — regression + groups
@@ -130,7 +130,7 @@ SCIM_CONNECTIVITY_CONFIRMED=Yes \
 SCIM_TOKEN=fake-token-for-testing \
 START_SCIM=No \
 ENABLE_SCIM_GROUPS=Yes \
-bash posit-oidc-scim-entra-configuration.sh
+bash posit-entra-auth.sh
 ```
 
 ### Test 8: PPM OIDC (bash) — regression
@@ -143,7 +143,7 @@ CLIENT_SECRET_NAME=bash-test-ppm-oidc-secret \
 SIGNIN_AUDIENCE=AzureADMyOrg \
 INCLUDE_GROUP_CLAIMS=No \
 GROUP_CLAIMS=None \
-bash posit-oidc-scim-entra-configuration.sh
+bash posit-entra-auth.sh
 ```
 
 ## Verification Checklist per Test

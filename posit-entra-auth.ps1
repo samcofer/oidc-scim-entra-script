@@ -538,7 +538,7 @@ if ($SkipOidc -ne 'Yes') {
     }
 
     Write-Host 'Requiring user assignment on enterprise app...'
-    $assignReqBody = @{ appRoleAssignmentRequired = $true } | ConvertTo-Json -Compress
+    $assignReqBody = @{ appRoleAssignmentRequired = $true; tags = @('WindowsAzureActiveDirectoryIntegratedApp') } | ConvertTo-Json -Compress
     Invoke-AzRestVoid -Method PATCH -Url "https://graph.microsoft.com/v1.0/servicePrincipals/$SpObjectId" -Body $assignReqBody
 
     Write-Host 'Assigning signed-in user to enterprise app...'
@@ -634,6 +634,10 @@ if ($CreateScim -eq 'Yes') {
         try {
             Invoke-AzRestVoid -Method POST -Url "https://graph.microsoft.com/v1.0/servicePrincipals/$ScimSpId/owners/`$ref" -Body $ownerBody
         } catch { }
+
+        Write-Host 'Tagging SCIM app as enterprise application...'
+        $scimTagBody = @{ tags = @('WindowsAzureActiveDirectoryIntegratedApp') } | ConvertTo-Json -Compress
+        Invoke-AzRestVoid -Method PATCH -Url "https://graph.microsoft.com/v1.0/servicePrincipals/$ScimSpId" -Body $scimTagBody
     } else {
         # Mode 1 (OIDC+SCIM unified): reuse the already-created SP
         $ScimSpId = $SpObjectId
