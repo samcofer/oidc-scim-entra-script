@@ -461,10 +461,10 @@ if [[ "$SKIP_OIDC" != "Yes" ]]; then
               }
             },
             optionalClaims: {
-              idToken: [
+              idToken: ([
                 {name: "email", essential: false},
                 {name: "preferred_username", essential: false}
-              ]
+              ] + (if $groups != "None" then [{name: "groups", essential: false}] else [] end))
             }
           }')" \
         >/dev/null
@@ -491,10 +491,10 @@ if [[ "$SKIP_OIDC" != "Yes" ]]; then
             }
           },
           optionalClaims: {
-            idToken: [
+            idToken: ([
               {name: "email", essential: false},
               {name: "preferred_username", essential: false}
-            ]
+            ] + (if $groups != "None" then [{name: "groups", essential: false}] else [] end))
           }
         }')" \
       -o json)"

@@ -430,6 +430,11 @@ if ($SkipOidc -ne 'Yes') {
             $SamlMetadataUrl = "https://login.microsoftonline.com/$TenantId/federationmetadata/2007-06/federationmetadata.xml?appid=$ClientId"
         } else {
             Write-Host 'Configuring app registration with OIDC settings...'
+            $idTokenClaims = @(
+                @{ name = 'email';              essential = $false }
+                @{ name = 'preferred_username'; essential = $false }
+            )
+            if ($GroupMembership -ne 'None') { $idTokenClaims += @{ name = 'groups'; essential = $false } }
             $patchBody = @{
                 signInAudience        = $SigninAudience
                 groupMembershipClaims = $GroupMembership
@@ -441,16 +446,18 @@ if ($SkipOidc -ne 'Yes') {
                     }
                 }
                 optionalClaims = @{
-                    idToken = @(
-                        @{ name = 'email';              essential = $false }
-                        @{ name = 'preferred_username'; essential = $false }
-                    )
+                    idToken = $idTokenClaims
                 }
             } | ConvertTo-Json -Depth 5 -Compress
             Invoke-AzRestVoid -Method PATCH -Url "https://graph.microsoft.com/v1.0/applications/$AppObjectId" -Body $patchBody
         }
     } else {
         Write-Host 'Creating OIDC app registration...'
+        $idTokenClaims = @(
+            @{ name = 'email';              essential = $false }
+            @{ name = 'preferred_username'; essential = $false }
+        )
+        if ($GroupMembership -ne 'None') { $idTokenClaims += @{ name = 'groups'; essential = $false } }
         $appBody = @{
             displayName            = $AppName
             signInAudience         = $SigninAudience
@@ -463,10 +470,7 @@ if ($SkipOidc -ne 'Yes') {
                 }
             }
             optionalClaims = @{
-                idToken = @(
-                    @{ name = 'email';              essential = $false }
-                    @{ name = 'preferred_username'; essential = $false }
-                )
+                idToken = $idTokenClaims
             }
         } | ConvertTo-Json -Depth 5 -Compress
 
