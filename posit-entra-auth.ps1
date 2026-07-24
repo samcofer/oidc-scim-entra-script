@@ -191,7 +191,7 @@ $script:State['TenantId'] = $TenantId
 $SignedInUser = (Invoke-AzJson ad signed-in-user show).id
 $GraphAppId = '00000003-0000-0000-c000-000000000000'
 $GraphSpId = (Invoke-AzJson ad sp show --id $GraphAppId).id
-$ScimTemplateId = '8adf8e6e-67b2-4cf2-a259-e3dc5476c621'
+$NonGalleryTemplateId = '8adf8e6e-67b2-4cf2-a259-e3dc5476c621'
 $ownerBody = @{ '@odata.id' = "https://graph.microsoft.com/v1.0/directoryObjects/$SignedInUser" } | ConvertTo-Json -Compress
 
 # --- Product selection ---
@@ -386,7 +386,7 @@ if ($SkipOidc -ne 'Yes') {
         # SAML and SCIM both require template instantiation for enterprise app
         Write-Host 'Creating enterprise application from Microsoft template...'
         $instantiateBody = @{ displayName = $AppName } | ConvertTo-Json -Compress
-        $templateJson = Invoke-AzRestJson -Method POST -Url "https://graph.microsoft.com/v1.0/applicationTemplates/$ScimTemplateId/instantiate" -Body $instantiateBody
+        $templateJson = Invoke-AzRestJson -Method POST -Url "https://graph.microsoft.com/v1.0/applicationTemplates/$NonGalleryTemplateId/instantiate" -Body $instantiateBody
 
         $SpObjectId = $templateJson.servicePrincipal.id
         $ClientId   = $templateJson.application.appId
@@ -411,7 +411,14 @@ if ($SkipOidc -ne 'Yes') {
         $AppObjectId = (Invoke-AzJson ad app show --id $ClientId).id
 
         if ($AuthProtocol -eq 'saml') {
-            $SamlEntityId = "api://$ClientId"
+            $SamlEntityId = switch ($Product) {
+                'connect'   { "$($BaseUrl.TrimEnd('/'))/__login__/saml" }
+                'workbench' { "$($BaseUrl.TrimEnd('/'))/saml/metadata" }
+            }
+
+            Write-Host 'Enabling SAML single sign-on on enterprise app...'
+            $samlBody = @{ preferredSingleSignOnMode = 'saml' } | ConvertTo-Json -Compress
+            Invoke-AzRestVoid -Method PATCH -Url "https://graph.microsoft.com/v1.0/servicePrincipals/$SpObjectId" -Body $samlBody
 
             Write-Host 'Configuring SAML on app registration...'
             $patchBody = @{
@@ -422,10 +429,6 @@ if ($SkipOidc -ne 'Yes') {
                 }
             } | ConvertTo-Json -Depth 5 -Compress
             Invoke-AzRestVoid -Method PATCH -Url "https://graph.microsoft.com/v1.0/applications/$AppObjectId" -Body $patchBody
-
-            Write-Host 'Enabling SAML single sign-on on enterprise app...'
-            $samlBody = @{ preferredSingleSignOnMode = 'saml' } | ConvertTo-Json -Compress
-            Invoke-AzRestVoid -Method PATCH -Url "https://graph.microsoft.com/v1.0/servicePrincipals/$SpObjectId" -Body $samlBody
 
             $SamlMetadataUrl = "https://login.microsoftonline.com/$TenantId/federationmetadata/2007-06/federationmetadata.xml?appid=$ClientId"
         } else {
@@ -605,7 +608,7 @@ if ($CreateScim -eq 'Yes') {
 
         Write-Host 'Creating SCIM enterprise application from Microsoft template...'
         $instantiateBody = @{ displayName = $ScimAppName } | ConvertTo-Json -Compress
-        $scimAppJson = Invoke-AzRestJson -Method POST -Url "https://graph.microsoft.com/v1.0/applicationTemplates/$ScimTemplateId/instantiate" -Body $instantiateBody
+        $scimAppJson = Invoke-AzRestJson -Method POST -Url "https://graph.microsoft.com/v1.0/applicationTemplates/$NonGalleryTemplateId/instantiate" -Body $instantiateBody
 
         $ScimSpId  = $scimAppJson.servicePrincipal.id
         $ScimAppId = $scimAppJson.application.appId

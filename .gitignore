@@ -1,0 +1,10 @@
+
+# --- cleanup: exclude secrets & build artifacts ---
+auth.json
+.env
+*.lic
+licenses/
+secrets.yaml
+__pycache__/
+*.pyc
+*.tar.gz

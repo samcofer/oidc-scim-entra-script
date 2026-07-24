@@ -213,7 +213,7 @@ TENANT_ID="$(jq -r '.tenantId' <<<"$ACCOUNT_JSON")"
 SIGNED_IN_USER="$(az ad signed-in-user show --query id -o tsv)"
 GRAPH_APP_ID="00000003-0000-0000-c000-000000000000"
 GRAPH_SP_ID="$(az ad sp show --id "$GRAPH_APP_ID" --query id -o tsv)"
-SCIM_TEMPLATE_ID="8adf8e6e-67b2-4cf2-a259-e3dc5476c621"
+NON_GALLERY_TEMPLATE_ID="8adf8e6e-67b2-4cf2-a259-e3dc5476c621"
 
 select_product
 
@@ -387,7 +387,7 @@ if [[ "$SKIP_OIDC" != "Yes" ]]; then
     # SAML and SCIM both require template instantiation for enterprise app
     echo "Creating enterprise application from Microsoft template..."
     TEMPLATE_JSON="$(az rest --method POST \
-      --url "https://graph.microsoft.com/v1.0/applicationTemplates/$SCIM_TEMPLATE_ID/instantiate" \
+      --url "https://graph.microsoft.com/v1.0/applicationTemplates/$NON_GALLERY_TEMPLATE_ID/instantiate" \
       --headers "Content-Type=application/json" \
       --body "$(jq -n --arg name "$APP_NAME" '{displayName: $name}')" \
       -o json)"
@@ -414,7 +414,17 @@ if [[ "$SKIP_OIDC" != "Yes" ]]; then
     APP_OBJECT_ID="$(az ad app show --id "$CLIENT_ID" --query id -o tsv)"
 
     if [[ "$AUTH_PROTOCOL" == "saml" ]]; then
-      SAML_ENTITY_ID="api://$CLIENT_ID"
+      case "$PRODUCT" in
+        connect)   SAML_ENTITY_ID="${BASE_URL%/}/__login__/saml" ;;
+        workbench) SAML_ENTITY_ID="${BASE_URL%/}/saml/metadata" ;;
+      esac
+
+      echo "Enabling SAML single sign-on on enterprise app..."
+      az rest --method PATCH \
+        --url "https://graph.microsoft.com/v1.0/servicePrincipals/$SP_OBJECT_ID" \
+        --headers "Content-Type=application/json" \
+        --body '{"preferredSingleSignOnMode": "saml"}' \
+        >/dev/null
 
       echo "Configuring SAML on app registration..."
       az rest --method PATCH \
@@ -431,13 +441,6 @@ if [[ "$SKIP_OIDC" != "Yes" ]]; then
               redirectUris: [$acsUrl]
             }
           }')" \
-        >/dev/null
-
-      echo "Enabling SAML single sign-on on enterprise app..."
-      az rest --method PATCH \
-        --url "https://graph.microsoft.com/v1.0/servicePrincipals/$SP_OBJECT_ID" \
-        --headers "Content-Type=application/json" \
-        --body '{"preferredSingleSignOnMode": "saml"}' \
         >/dev/null
 
       SAML_METADATA_URL="https://login.microsoftonline.com/$TENANT_ID/federationmetadata/2007-06/federationmetadata.xml?appid=$CLIENT_ID"
@@ -640,7 +643,7 @@ if [[ "$CREATE_SCIM" == "Yes" ]]; then
 
     echo "Creating SCIM enterprise application from Microsoft template..."
     SCIM_APP_JSON="$(az rest --method POST \
-      --url "https://graph.microsoft.com/v1.0/applicationTemplates/$SCIM_TEMPLATE_ID/instantiate" \
+      --url "https://graph.microsoft.com/v1.0/applicationTemplates/$NON_GALLERY_TEMPLATE_ID/instantiate" \
       --headers "Content-Type=application/json" \
       --body "$(jq -n --arg name "$SCIM_APP_NAME" '{displayName: $name}')" \
       -o json)"
